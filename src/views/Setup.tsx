@@ -3,7 +3,8 @@ import { clientId, listChildren, signIn, signOut, type ScanProgress } from '../d
 import { canWrite, TRASH } from '../local/fs';
 import type { Folder } from '../lib/model';
 
-function PickerNode({ f, depth, selected, toggle }: { f: Folder; depth: number; selected: Map<string, Folder>; toggle: (f: Folder) => void }) {
+function PickerNode({ f, depth, selected, toggle, under = [] }: { f: Folder; depth: number; selected: Map<string, Folder>; toggle: (f: Folder, under: string[]) => void; under?: string[] }) {
+  const inherited = under.some((id) => selected.has(id)); // a parent folder is ticked, so this one is included
   const [kids, setKids] = useState<Folder[] | null>(null);
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState('');
@@ -18,11 +19,11 @@ function PickerNode({ f, depth, selected, toggle }: { f: Folder; depth: number; 
     <div>
       <div className="tnode" style={{ paddingLeft: 6 + depth * 18 }}>
         <button className="tog" onClick={expand} aria-label={open ? 'Collapse' : 'Show subfolders'}>{open ? '▾' : '▸'}</button>
-        <input type="checkbox" id={'pick-' + f.id} checked={selected.has(f.id)} onChange={() => toggle(f)} />
+        <input type="checkbox" id={'pick-' + f.id} checked={inherited || selected.has(f.id)} disabled={inherited} title={inherited ? 'Included with its parent folder' : undefined} onChange={() => toggle(f, under)} />
         <label className="name" htmlFor={'pick-' + f.id}>{f.name}</label>
       </div>
       {err && <div className="error" style={{ paddingLeft: 40 }}>{err}</div>}
-      {open && kids?.map((k) => <PickerNode key={k.id} f={k} depth={depth + 1} selected={selected} toggle={toggle} />)}
+      {open && kids?.map((k) => <PickerNode key={k.id} f={k} depth={depth + 1} selected={selected} toggle={toggle} under={[...under, f.id]} />)}
       {open && kids && !kids.length && <div className="muted" style={{ paddingLeft: 52 + depth * 18, fontSize: 12 }}>No subfolders</div>}
     </div>
   );
@@ -36,7 +37,17 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
   const [cid, setCid] = useState(clientId());
   const [err, setErr] = useState('');
   const [selected, setSelected] = useState<Map<string, Folder>>(() => new Map(roots.map((r) => [r.id, r])));
-  const toggle = (f: Folder) => setSelected((s) => { const x = new Map(s); x.has(f.id) ? x.delete(f.id) : x.set(f.id, f); return x; });
+  // Remember each ticked folder's parents, so ticking a parent replaces any of its subfolders ticked before.
+  const [parentsOf] = useState(() => new Map<string, string[]>());
+  const toggle = (f: Folder, under: string[]) => setSelected((s) => {
+    const x = new Map(s);
+    if (x.has(f.id)) x.delete(f.id);
+    else {
+      x.set(f.id, f); parentsOf.set(f.id, under);
+      for (const id of [...x.keys()]) if (parentsOf.get(id)?.includes(f.id)) x.delete(id);
+    }
+    return x;
+  });
   const saveCid = () => { try { localStorage.setItem('po.clientId', cid.trim()); } catch {} setErr(''); };
   const doSignIn = async () => { setErr(''); try { saveCid(); await signIn('consent'); setSignedIn(true); } catch (e) { setErr((e as Error).message); } };
   const progressBox = scanning && progress && (
@@ -93,7 +104,7 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
 
       <div>
         <h2>2 · Choose folders to include</h2>
-        <p className="muted">Tick the folders the app should look at. Subfolders are included. Nothing is moved.</p>
+        <p className="muted">Tick the folders the app should look at. Ticking a folder includes all its subfolders. Nothing is moved.</p>
         {signedIn ? (
           <div className="tree"><PickerNode f={{ id: 'root', name: 'My Drive' }} depth={0} selected={selected} toggle={toggle} /></div>
         ) : <p className="muted">Sign in first.</p>}

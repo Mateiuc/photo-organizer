@@ -41,6 +41,15 @@ export default function App() {
         setItems(d.items); setFolders(d.folders); setMeta({ roots: [d.folders[0]] });
       } else {
         const d = await lib.load();
+        // Older scans saved files sitting directly in "My Drive" under Drive's hidden id instead of 'root'.
+        if (d.meta.roots.some((r) => r.id === 'root')) {
+          const known = new Set(d.folders.map((f) => f.id));
+          const stray = new Set(d.items.filter((i) => i.folderId && !known.has(i.folderId)).map((i) => i.folderId));
+          if (stray.size === 1) {
+            d.items = d.items.map((i) => (i.folderId && stray.has(i.folderId) ? { ...i, folderId: 'root' } : i));
+            await lib.putItems(d.items.filter((i) => i.folderId === 'root'));
+          }
+        }
         setItems(d.items); setFolders(d.folders); setMeta(d.meta);
         if (!d.items.length) setView('setup');
       }
@@ -109,7 +118,7 @@ export default function App() {
     await runScan(m, async (onFolder) => {
       for (const r of roots) { await lib.putFolder(r); }
       setFolders((prev) => [...prev.filter((p) => !roots.some((r) => r.id === p.id)), ...roots]);
-      await scanFolders(roots, async (folder, media, subs) => onFolder(folder, media.map(toItem).filter((x): x is Item => !!x), subs), setProgress, stopRef.current);
+      await scanFolders(roots, async (folder, media, subs) => onFolder(folder, media.map(toItem).filter((x): x is Item => !!x).map((x) => ({ ...x, folderId: folder.id })), subs), setProgress, stopRef.current);
     }, false);
   }, [meta, runScan]);
 
