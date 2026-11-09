@@ -10,11 +10,11 @@ function Details({ x, pathOf }: { x: Item; pathOf: (id?: string) => string }) {
   return (
     <>
       <b>{x.name}</b>
-      <span className="muted">{pathOf(x.folderId)}</span>
+      <span className="muted">{pathOf(x.folderId) || 'Folder outside the scanned folders'}</span>
       {!hasCameraData(x) && <span className="tag extra">No camera data</span>}
       <span>{x.takenAt ? x.takenAt.replace('T', ' ') : 'No date'} <span className="muted">· {src}</span></span>
       <span>{fmtSize(x.size)}{x.width ? ` · ${x.width}×${x.height}` : ''}{x.durationMs ? ` · ${fmtDuration(x.durationMs)}` : ''}</span>
-      <span className="muted">{x.camera ?? 'No camera'} · {x.lat != null ? 'has place' : 'no place'}</span>
+      {x.kind !== 'video' && <span className="muted">{x.camera ?? 'No camera'} · {x.lat != null ? 'has place' : 'no place'}</span>}
     </>
   );
 }

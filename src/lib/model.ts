@@ -189,7 +189,8 @@ export function exactDuplicates(items: Item[]): Item[][] {
 export function metaScore(x: Item): number {
   return (x.takenFrom === 'camera' ? 8 : 0) + (x.lat != null ? 4 : 0) + (x.camera ? 2 : 0) + (x.width ? 1 : 0);
 }
-export const hasCameraData = (x: Item) => x.takenFrom === 'camera' || !!x.camera;
+/** Videos rarely carry camera data that Drive or the browser can read, so they always count as having it. */
+export const hasCameraData = (x: Item) => x.kind === 'video' || x.takenFrom === 'camera' || !!x.camera;
 
 /** Which copy to keep: the one with the most camera information, not WhatsApp, in a folder named for the photo's month, in the most specific folder. */
 export function pickKeeper(group: Item[], pathOf: (folderId?: string) => string): Item {
