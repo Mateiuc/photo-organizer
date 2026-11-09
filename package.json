@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@vladmandic/face-api": "^1.7.15",
     "exifr": "^7.1.3",
     "idb": "8.0.0",
     "leaflet": "1.9.4",

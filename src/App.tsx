@@ -9,10 +9,12 @@ import { Duplicates } from './views/Duplicates';
 import { Folders } from './views/Folders';
 import { MonthGrid } from './views/Grid';
 import { Places } from './views/Places';
+import { People } from './views/People';
+import { namesByItem } from './faces/people';
 import { Setup } from './views/Setup';
 import { Viewer } from './views/Viewer';
 
-type View = 'photos' | 'places' | 'folders' | 'duplicates' | 'setup';
+type View = 'photos' | 'places' | 'people' | 'folders' | 'duplicates' | 'setup';
 const DEMO = new URLSearchParams(location.search).has('demo');
 const lib = new Library(DEMO ? 'photo-organizer-demo' : 'photo-organizer');
 const KINDS: { k: Kind; label: string }[] = [
@@ -59,7 +61,10 @@ export default function App() {
   }, []);
 
   const fx = useMemo(() => folderIndex(folders), [folders]);
-  const shown = useMemo(() => applyFilters(items, filters, fx.pathOf, fx.inFolder), [items, filters, fx]);
+  const shown = useMemo(() => {
+    const names = filters.q ? namesByItem() : undefined; // people's names are searchable too
+    return applyFilters(items, filters, fx.pathOf, fx.inFolder, names && ((it) => names.get(it.id)?.join(' ')));
+  }, [items, filters, fx]);
   const dupCount = useMemo(() => exactDuplicates(items).reduce((s, g) => s + g.length - 1, 0), [items]);
   const placeCount = useMemo(() => items.filter((i) => i.lat != null).length, [items]);
 
@@ -199,6 +204,7 @@ export default function App() {
         <div className="brand"><img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" />Photo Organizer</div>
         {nav('photos', 'Photos', items.length)}
         {nav('places', 'Places', placeCount)}
+        {nav('people', 'People')}
         {nav('folders', 'Folders')}
         {nav('duplicates', 'Duplicates', dupCount)}
         <div className="grow" />
@@ -207,10 +213,10 @@ export default function App() {
       </nav>
       <div className="main">
         <header className="top">
-          <h1>{{ photos: 'Photos', places: 'Places', folders: 'Folders', duplicates: 'Duplicates', setup: 'Choose photos' }[view]}</h1>
+          <h1>{{ photos: 'Photos', places: 'Places', people: 'People', folders: 'Folders', duplicates: 'Duplicates', setup: 'Choose photos' }[view]}</h1>
           {view !== 'setup' && view !== 'folders' && (
             <>
-              <input className="search" type="search" id="q" placeholder="Search names, folders, camera…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
+              <input className="search" type="search" id="q" placeholder="Search names, people, folders, camera…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
               {KINDS.map(({ k, label }) => (
                 <button key={k} className={`chip ${kindsOn(k) ? 'on' : ''}`} onClick={() => setFilters({ ...filters, kinds: kindsOn(k) ? filters.kinds.filter((x) => x !== k) : [...filters.kinds, k] })}>{label}</button>
               ))}
@@ -238,6 +244,7 @@ export default function App() {
             {needsReopen && view !== 'setup' && <div className="notice row" style={{ marginBottom: 12 }}><span>To show the pictures, the browser needs your OK to open “{meta.localName}” again.</span><button className="btn primary" onClick={reopen}>Open folder</button></div>}
             {view === 'photos' && (items.length ? <MonthGrid items={shown} onOpen={open} onBroken={onBroken} /> : <div className="panel"><h2>No photos yet</h2><p className="muted">Choose a folder with photos to get started.</p><div className="row"><button className="btn primary" onClick={() => setView('setup')}>Choose folder</button></div></div>)}
             {view === 'places' && <Places items={shown} onOpen={open} />}
+            {view === 'people' && <People items={shown} onOpen={open} readOnly={!DEMO && (isLocal ? needsReopen : !signedIn)} />}
             {view === 'folders' && <Folders folders={folders} items={items} roots={meta.roots.length ? meta.roots : fx.children(undefined)} children={fx.children} onPick={(f) => { setFilters({ ...emptyFilters, folderId: f.id }); setShowFilters(true); setView('photos'); }} />}
             {view === 'duplicates' && <Duplicates items={shown} pathOf={fx.pathOf} onTrash={trash} onOpen={open} readOnly={!DEMO && (isLocal ? !canWrite || needsReopen : !signedIn)} local={isLocal} />}
             {view === 'setup' && <Setup demo={DEMO} source={meta.source} localName={meta.localName} onChooseFolder={chooseFolder} onChooseFiles={chooseFiles} roots={meta.source === 'drive' ? meta.roots : []} signedIn={signedIn} setSignedIn={setSignedIn} onScan={scan} scanning={scanning} progress={progress} onStop={() => { stopRef.current.stop = true; }} lastScan={meta.lastScan} onClear={async () => { await lib.clear(); setItems([]); setFolders([]); setMeta({ roots: [] }); }} />}

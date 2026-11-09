@@ -101,6 +101,15 @@ async function call<T>(path: string, init: RequestInit = {}, retry = 2): Promise
   return r.status === 204 ? (undefined as T) : r.json();
 }
 
+/** The whole file's bytes, for when a preview can't be read (used to find faces). */
+export async function downloadFile(id: string): Promise<Blob> {
+  if (!token || token.exp < Date.now() + 60_000) throw new Error(NEEDS_SIGN_IN);
+  const r = await fetch(`${API}/files/${id}?alt=media`, { headers: { Authorization: `Bearer ${token.value}` } });
+  if (r.status === 401) { token = null; throw new Error(NEEDS_SIGN_IN); }
+  if (!r.ok) throw new Error('Google Drive: ' + r.status);
+  return r.blob();
+}
+
 interface ListPage { files: DriveFile[]; nextPageToken?: string }
 
 export async function listChildren(parentId: string, onlyFolders = false): Promise<DriveFile[]> {

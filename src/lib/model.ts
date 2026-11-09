@@ -270,7 +270,7 @@ export interface Filters {
 
 export const emptyFilters: Filters = { kinds: [], q: '', withPlace: 'any' };
 
-export function applyFilters(items: Item[], f: Filters, pathOf: (id?: string) => string, inFolder: (itemFolder: string | undefined, root: string) => boolean): Item[] {
+export function applyFilters(items: Item[], f: Filters, pathOf: (id?: string) => string, inFolder: (itemFolder: string | undefined, root: string) => boolean, extra?: (it: Item) => string | undefined): Item[] {
   const q = f.q.trim().toLowerCase();
   return items.filter((it) => {
     if (f.kinds.length && !f.kinds.includes(it.kind)) return false;
@@ -281,7 +281,7 @@ export function applyFilters(items: Item[], f: Filters, pathOf: (id?: string) =>
     if (f.withPlace === 'yes' && it.lat == null) return false;
     if (f.withPlace === 'no' && it.lat != null) return false;
     if (f.folderId && !inFolder(it.folderId, f.folderId)) return false;
-    if (q && !(it.name.toLowerCase().includes(q) || pathOf(it.folderId).toLowerCase().includes(q) || (it.camera ?? '').toLowerCase().includes(q) || it.tags.some((t) => t.toLowerCase().includes(q)))) return false;
+    if (q && !(it.name.toLowerCase().includes(q) || pathOf(it.folderId).toLowerCase().includes(q) || (it.camera ?? '').toLowerCase().includes(q) || it.tags.some((t) => t.toLowerCase().includes(q)) || (extra?.(it) ?? '').toLowerCase().includes(q))) return false;
     return true;
   });
 }

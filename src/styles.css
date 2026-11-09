@@ -117,3 +117,13 @@ input[type=text], input[type=date], input[type=number], select { font: inherit; 
 .pick { justify-self: start; font: inherit; font-size: 11px; font-weight: 700; border-radius: 6px; padding: 3px 9px; cursor: pointer; border: 1px solid currentColor; background: transparent; }
 .pick.keep { color: var(--good); } .pick.extra { color: var(--bad); }
 .pick:disabled { cursor: not-allowed; opacity: .7; }
+.people { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+.pcard { display: grid; justify-items: center; gap: 4px; padding: 12px 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; font: inherit; color: inherit; text-align: center; overflow-wrap: anywhere; }
+.pcard:hover { border-color: var(--accent, #2f5bd3); }
+.face { width: 84px; height: 84px; border-radius: 50%; object-fit: cover; background: var(--line); display: block; }
+.face.big { width: 120px; height: 120px; }
+.person-head { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+.faces { display: flex; flex-wrap: wrap; gap: 8px; }
+.facebox { position: relative; }
+.facebox .face { width: 64px; height: 64px; }
+.facebox .x { position: absolute; top: -4px; right: -4px; width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--bad); cursor: pointer; font-size: 11px; line-height: 1; padding: 0; }
