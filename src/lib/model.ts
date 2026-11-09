@@ -177,7 +177,7 @@ export function localToItem(f: LocalFile): Item | null {
 export function exactDuplicates(items: Item[]): Item[][] {
   const by = new Map<string, Item[]>();
   for (const it of items) {
-    if (!it.md5) continue;
+    if (!it.md5 || !it.size) continue; // empty files all share one fingerprint; they're listed separately
     const key = it.md5 + ':' + it.size;
     const arr = by.get(key);
     arr ? arr.push(it) : by.set(key, [it]);

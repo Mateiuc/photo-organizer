@@ -116,3 +116,7 @@ describe('copy names and wrong folders', () => {
     expect(worseReason(b, a, p)).toMatch(/copy/);
   });
 });
+
+it('does not call empty files copies of each other', () => {
+  expect(exactDuplicates([base({ id: 'a', name: 'MOV_0014.mp4', md5: 'e', size: 0 }), base({ id: 'b', name: 'x.jpg', md5: 'e', size: 0 })])).toEqual([]);
+});

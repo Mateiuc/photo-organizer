@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { exactDuplicates, fmtDuration, fmtSize, hasCameraData, pickKeeper, possibleCopies, worseReason, type Item } from '../lib/model';
 import { Preview } from './Grid';
 
-type Tab = 'exact' | 'maybe';
+type Tab = 'exact' | 'maybe' | 'empty';
 
 /** One copy's details, so differences between copies are easy to see. */
 function Details({ x, pathOf, why }: { x: Item; pathOf: (id?: string) => string; why: string }) {
@@ -23,12 +23,14 @@ export function Duplicates({ items, pathOf, onTrash, onOpen, readOnly, local }: 
   const [tab, setTab] = useState<Tab>('exact');
   const exact = useMemo(() => exactDuplicates(items), [items]);
   const maybe = useMemo(() => possibleCopies(items), [items]);
-  const groups = tab === 'exact' ? exact : maybe;
+  const empty = useMemo(() => { const e = items.filter((x) => x.size === 0); return e.length ? [e] : []; }, [items]);
+  const groups = tab === 'exact' ? exact : tab === 'maybe' ? maybe : empty;
 
   // What the app suggests removing. Exact copies: all but the best one. Possible copies: only the ones that lost
   // their camera data while another copy still has it; the rest is left for you to decide.
   const suggested = useMemo(() => {
     const out = new Set<string>();
+    if (tab === 'empty') { groups.flat().forEach((x) => out.add(x.id)); return out; }
     for (const g of groups) {
       const keep = pickKeeper(g, pathOf);
       if (tab === 'exact') g.forEach((x) => x !== keep && out.add(x.id));
@@ -40,7 +42,7 @@ export function Duplicates({ items, pathOf, onTrash, onOpen, readOnly, local }: 
   const isOut = (x: Item) => changed.get(x.id) ?? suggested.has(x.id);
   const toggle = (x: Item, g: Item[]) => {
     const next = !isOut(x);
-    if (next && g.filter((y) => y !== x).every(isOut)) return; // always keep at least one copy
+    if (next && tab !== 'empty' && g.filter((y) => y !== x).every(isOut)) return; // always keep at least one copy
     setChanged((m) => new Map(m).set(x.id, next));
   };
 
@@ -56,6 +58,7 @@ export function Duplicates({ items, pathOf, onTrash, onOpen, readOnly, local }: 
       <div className="row">
         <button className={`chip ${tab === 'exact' ? 'on' : ''}`} onClick={() => { setTab('exact'); setLimit(60); setConfirm(false); }}>Identical files · {exact.length.toLocaleString()}</button>
         <button className={`chip ${tab === 'maybe' ? 'on' : ''}`} onClick={() => { setTab('maybe'); setLimit(60); setConfirm(false); }}>Possible copies · {maybe.length.toLocaleString()}</button>
+        {empty.length > 0 && <button className={`chip ${tab === 'empty' ? 'on' : ''}`} onClick={() => { setTab('empty'); setLimit(60); setConfirm(false); }}>Empty files · {empty[0].length.toLocaleString()}</button>}
       </div>
       <div className="panel">
         <div className="stats">
@@ -63,7 +66,9 @@ export function Duplicates({ items, pathOf, onTrash, onOpen, readOnly, local }: 
           <div><b>{chosen.length.toLocaleString()}</b><span>marked to remove</span></div>
           <div><b>{fmtSize(space)}</b><span>you'd free</span></div>
         </div>
-        {tab === 'exact' ? (
+        {tab === 'empty' ? (
+          <p className="muted">These files are empty (0 bytes): there is no photo or video inside, usually because an upload or copy failed. They can't be opened and are safe to remove. Click any file to keep it.</p>
+        ) : tab === 'exact' ? (
           <p className="muted">For videos, the preview picture can come from a different moment in each copy, so two identical videos may show different pictures. {local ? 'These files have identical content, checked with a fingerprint of each file.' : "These files are byte-for-byte identical, checked with Google Drive's own fingerprint of each file."} The app keeps the copy with the most camera data (date, place, camera). Copies are marked to remove when they lost camera data, sit in a folder for another date (like a 2020 photo in “2017-07”), or have a copy-style name (like “photo (1).jpg”). Click any copy's button to change what is kept.</p>
         ) : (
           <p className="muted">These are probably the same photo, but the files are <b>not identical</b>. They have the same file name, or the same camera moment and picture size. Often one copy was re-saved, made smaller, or lost its camera data. A copy is marked to remove when another copy is clearly better: it still has camera data, sits in the folder for its date, or has the original name. Everything else is up to you: open the photos and click to choose.</p>
@@ -82,11 +87,11 @@ export function Duplicates({ items, pathOf, onTrash, onOpen, readOnly, local }: 
       {!groups.length && <p className="muted">{tab === 'exact' ? 'No identical files found.' : 'No possible copies found.'}</p>}
       {groups.slice(0, limit).map((g) => { const keep = pickKeeper(g, pathOf); return (
         <section className="dup" key={g.map((x) => x.id).join('|')}>
-          <h3>{g.length} copies{tab === 'exact' ? ` · ${fmtSize(g[0].size)} each` : ''}</h3>
+          <h3>{tab === 'empty' ? `${g.length} empty files` : `${g.length} copies${tab === 'exact' ? ` · ${fmtSize(g[0].size)} each` : ''}`}</h3>
           <div className="grid">
             {g.map((x) => {
               const out = isOut(x);
-              const last = !out && g.filter((y) => y !== x).every(isOut);
+              const last = tab !== 'empty' && !out && g.filter((y) => y !== x).every(isOut);
               return (
                 <div className={`dcard ${out ? 'extra' : 'keep'}`} key={x.id}>
                   <button className="tile" style={{ borderRadius: 0 }} onClick={() => onOpen(g, g.indexOf(x))}><Preview item={x} /></button>
