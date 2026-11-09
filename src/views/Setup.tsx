@@ -43,7 +43,7 @@ export function Setup({ roots, signedIn, setSignedIn, onScan, scanning, progress
       <section className="panel">
         <h2>1 · Connect Google Drive</h2>
         <p className="muted">The app reads your Drive directly from this browser. Your photos are never sent anywhere else. It can only change files when you confirm an action, such as moving duplicates to the trash.</p>
-        {!import.meta.env.VITE_GOOGLE_CLIENT_ID && (
+        {false && (
           <label style={{ display: 'grid', gap: 4 }}>
             <span className="muted">Google Client ID (from Google Cloud, ends in .apps.googleusercontent.com)</span>
             <input type="text" id="cid" value={cid} onChange={(e) => setCid(e.target.value)} placeholder="1234-abc.apps.googleusercontent.com" />

@@ -17,12 +17,15 @@ declare global {
 let token: { value: string; exp: number } | null = null;
 let tokenClient: any = null;
 
+// Cip's Google OAuth Client ID (public by design; the client secret is never used in a browser app).
+const DEFAULT_CLIENT_ID = '748955765947-lodu85tvdbkvag04a1045lijna2rijqt.apps.googleusercontent.com';
+
 export function clientId(): string {
   try {
     const saved = localStorage.getItem('po.clientId');
     if (saved) return saved;
   } catch {}
-  return (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) ?? '';
+  return (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) ?? DEFAULT_CLIENT_ID;
 }
 
 function loadGis(): Promise<void> {
