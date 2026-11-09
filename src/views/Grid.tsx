@@ -1,16 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { fmtDuration, monthLabel, sizedThumb, type Item } from '../lib/model';
+import { useLocalThumb } from '../local/thumbs';
+
+const noPreview = (item: Item) => <span className="ph">{item.kind === 'raw' ? 'RAW · no preview' : item.name}</span>;
+
+/** A file on this computer: the preview is made once the tile scrolls into view. */
+function LocalPreview({ item }: { item: Item }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [vis, setVis] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { setVis(true); io.disconnect(); } }, { rootMargin: '400px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
+  const url = useLocalThumb(item, vis);
+  if (url) return <img src={url} alt="" decoding="async" />;
+  return <span ref={ref} className="ph">{url === undefined ? noPreview(item).props.children : ''}</span>;
+}
+
+/** The picture inside a tile, for Drive files and files on this computer. */
+export function Preview({ item, px = 320, onBroken }: { item: Item; px?: number; onBroken?: (it: Item) => void }) {
+  const [bad, setBad] = useState(false);
+  if (item.local) return <LocalPreview item={item} />;
+  const src = sizedThumb(item.thumb, px);
+  return src && !bad
+    ? <img src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => { setBad(true); onBroken?.(item); }} />
+    : noPreview(item);
+}
 
 export function Thumb({ item, onOpen, onBroken }: { item: Item; onOpen: () => void; onBroken?: (it: Item) => void }) {
-  const [bad, setBad] = useState(false);
-  const src = sizedThumb(item.thumb, 320);
   return (
     <button className="tile" onClick={onOpen} title={item.name} aria-label={`Open ${item.name}`}>
-      {src && !bad ? (
-        <img src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => { setBad(true); onBroken?.(item); }} />
-      ) : (
-        <span className="ph">{item.kind === 'raw' ? 'RAW · no preview' : item.name}</span>
-      )}
+      <Preview item={item} onBroken={onBroken} />
       {item.kind === 'video' && <span className="badge">▶ {fmtDuration(item.durationMs)}</span>}
       {item.kind === 'raw' && <span className="badge">RAW</span>}
     </button>

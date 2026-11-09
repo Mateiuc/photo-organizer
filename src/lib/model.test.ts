@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
+import { localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
 
 describe('dates', () => {
   it('reads camera time', () => expect(exifToIso('2017:07:01 17:25:23')).toBe('2017-07-01T17:25:23'));
@@ -61,3 +61,16 @@ describe('filters', () => {
 });
 
 it('resizes Drive thumbnails', () => expect(sizedThumb('https://lh3.googleusercontent.com/abc=s220', 1600)).toBe('https://lh3.googleusercontent.com/abc=s1600'));
+
+describe('local files', () => {
+  it('knows media by extension', () => { expect(mimeFromName('A.JPG')).toBe('image/jpeg'); expect(mimeFromName('notes.txt')).toBe(''); });
+  it('reads camera data', () => {
+    const it = localToItem({ path: 'Pics/2015/a.jpg', name: 'a.jpg', size: 5, mtime: 0, folderId: 'local:Pics/2015', exif: { time: '2015:08:03 10:00:00', make: 'NIKON', model: 'D90', lat: 47.2, lon: 13.1 } })!;
+    expect(it).toMatchObject({ id: 'local:Pics/2015/a.jpg', takenAt: '2015-08-03T10:00:00', takenFrom: 'camera', camera: 'NIKON D90', lat: 47.2, local: true });
+  });
+  it('falls back to file name, then file date', () => {
+    expect(localToItem({ path: 'x/VID_20200313_155816.mp4', name: 'VID_20200313_155816.mp4', size: 1, mtime: 0, folderId: 'local:x' })!.takenFrom).toBe('filename');
+    expect(localToItem({ path: 'x/clip.mov', name: 'clip.mov', size: 1, mtime: Date.UTC(2019, 0, 5), folderId: 'local:x' })!.takenFrom).toBe('file');
+  });
+  it('skips other files', () => expect(localToItem({ path: 'x/a.pdf', name: 'a.pdf', size: 1, mtime: 0, folderId: 'x' })).toBeNull());
+});

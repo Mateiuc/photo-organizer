@@ -6,6 +6,9 @@ import type { Folder, Item } from './model';
 export interface Meta {
   roots: Folder[];
   lastScan?: string;
+  /** Where the photos come from: a folder on this computer, or Google Drive. */
+  source?: 'local' | 'drive';
+  localName?: string;
 }
 
 let dbp: Promise<IDBPDatabase> | null = null;

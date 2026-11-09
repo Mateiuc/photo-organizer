@@ -3,6 +3,8 @@ import { getFile, scanFolders, trashFile, type ScanProgress } from './drive/api'
 import { demoLibrary } from './lib/demo';
 import { applyFilters, emptyFilters, exactDuplicates, toItem, type Filters, type Folder, type Item, type Kind } from './lib/model';
 import { folderIndex, Library, type Meta } from './lib/store';
+import { askAccess, canWrite, fingerprint, isOpen, moveToTrash, pickFolder, rememberedFolder, scanFileList, scanFolder } from './local/fs';
+import { clearThumbs } from './local/thumbs';
 import { Duplicates } from './views/Duplicates';
 import { Folders } from './views/Folders';
 import { MonthGrid } from './views/Grid';
@@ -51,11 +53,13 @@ export default function App() {
   const dupCount = useMemo(() => exactDuplicates(items).reduce((s, g) => s + g.length - 1, 0), [items]);
   const placeCount = useMemo(() => items.filter((i) => i.lat != null).length, [items]);
 
-  const scan = useCallback(async (roots: Folder[]) => {
+  type Walk = (onFolder: (folder: Folder, media: Item[], subs: Folder[]) => Promise<void>) => Promise<Folder[] | void>;
+  /** Shared by both sources: fills the library while walking, then forgets files that are gone. */
+  const runScan = useCallback(async (base: Meta, walk: Walk, local: boolean) => {
     setError(''); setScanning(true); stopRef.current = { stop: false };
-    const m: Meta = { ...meta, roots };
-    setMeta(m); await lib.setMeta(m);
+    if (local) clearThumbs();
     const seen = new Set<string>();
+    const found: Item[] = [];
     const pendingItems: Item[] = [], pendingFolders: Folder[] = [];
     let flushAt = Date.now();
     const flush = () => {
@@ -63,40 +67,95 @@ export default function App() {
       if (pendingItems.length) { const it = pendingItems.splice(0); setItems((prev) => { const by = new Map(prev.map((x) => [x.id, x])); it.forEach((x) => by.set(x.id, x)); return [...by.values()]; }); }
     };
     try {
-      for (const r of roots) { await lib.putFolder(r); pendingFolders.push(r); }
-      await scanFolders(roots, async (folder, media, subs) => {
+      const roots = await walk(async (_folder, its, subs) => {
         for (const s of subs) await lib.putFolder(s);
         pendingFolders.push(...subs);
-        const its = media.map(toItem).filter((x): x is Item => !!x);
-        its.forEach((x) => seen.add(x.id));
+        its.forEach((x) => { seen.add(x.id); found.push(x); });
         await lib.putItems(its);
         pendingItems.push(...its);
         if (Date.now() - flushAt > 1500) { flushAt = Date.now(); flush(); }
-      }, setProgress, stopRef.current);
+      });
+      if (local && !stopRef.current.stop) {
+        // Duplicate check: only files that share their exact size with another file need a fingerprint.
+        const bySize = new Map<number, Item[]>();
+        found.forEach((x) => { const g = bySize.get(x.size); g ? g.push(x) : bySize.set(x.size, [x]); });
+        const todo = [...bySize.values()].filter((g) => g.length > 1).flat().filter((x) => !x.md5);
+        for (let i = 0; i < todo.length && !stopRef.current.stop; i++) {
+          if (i % 10 === 0) setProgress({ folders: 0, files: found.length, current: `checking for duplicates, ${i.toLocaleString()} of ${todo.length.toLocaleString()}` });
+          const md5 = await fingerprint(todo[i].id).catch(() => undefined);
+          if (md5) { const n = { ...todo[i], md5 }; await lib.putItems([n]); pendingItems.push(n); }
+        }
+      }
       flush();
       if (!stopRef.current.stop) {
-        // forget files that are gone from Drive (deleted or moved out of the chosen folders)
+        // forget files that are gone (deleted, moved away, or from a folder no longer chosen)
         const gone = (await lib.load()).items.filter((it) => !seen.has(it.id)).map((it) => it.id);
         if (gone.length) { await lib.removeItems(gone); setItems((prev) => prev.filter((x) => seen.has(x.id))); }
-        const m2 = { ...m, lastScan: new Date().toISOString() };
+        const m2: Meta = { ...base, roots: roots || base.roots, lastScan: new Date().toISOString() };
         setMeta(m2); await lib.setMeta(m2);
         setView('photos');
       }
     } catch (e) {
       flush();
-      setError((e as Error).message);
+      if ((e as Error).name !== 'AbortError') setError((e as Error).message);
     } finally {
       setScanning(false); setProgress(null);
     }
-  }, [meta]);
+  }, []);
 
+  const scan = useCallback(async (roots: Folder[]) => {
+    const m: Meta = { ...meta, roots, source: 'drive' };
+    setMeta(m); await lib.setMeta(m);
+    await runScan(m, async (onFolder) => {
+      for (const r of roots) { await lib.putFolder(r); }
+      setFolders((prev) => [...prev.filter((p) => !roots.some((r) => r.id === p.id)), ...roots]);
+      await scanFolders(roots, async (folder, media, subs) => onFolder(folder, media.map(toItem).filter((x): x is Item => !!x), subs), setProgress, stopRef.current);
+    }, false);
+  }, [meta, runScan]);
+
+  const scanDir = useCallback(async (dir: FileSystemDirectoryHandle) => {
+    const m: Meta = { roots: [], source: 'local', localName: dir.name };
+    const known = new Map(items.map((x) => [x.id, x]));
+    await runScan(m, async (onFolder) => {
+      const top = { id: 'local:' + dir.name, name: dir.name };
+      await lib.putFolder(top); setFolders((prev) => [...prev.filter((p) => p.id !== top.id), top]);
+      return [await scanFolder(dir, known, onFolder, setProgress, stopRef.current)];
+    }, true);
+  }, [items, runScan]);
+
+  const chooseFolder = useCallback(async () => {
+    try { await scanDir(await pickFolder()); } catch (e) { if ((e as Error).name !== 'AbortError') setError((e as Error).message); }
+  }, [scanDir]);
+
+  const chooseFiles = useCallback(async (list: File[]) => {
+    const name = (list[0] as any)?.webkitRelativePath?.split('/')[0] ?? 'Folder';
+    const known = new Map(items.map((x) => [x.id, x]));
+    await runScan({ roots: [], source: 'local', localName: name }, async (onFolder) => {
+      const top = await scanFileList(list, known, onFolder, setProgress, stopRef.current);
+      return top ? [top] : [];
+    }, true);
+  }, [items, runScan]);
+
+  /** After the browser restarts, files on this computer need one click to open again. */
+  const reopen = useCallback(async () => {
+    const h = await rememberedFolder();
+    if (h && (await askAccess(h).catch(() => false))) await scanDir(h);
+    else await chooseFolder();
+  }, [scanDir, chooseFolder]);
+
+  const itemsRef = useRef(items); itemsRef.current = items;
   const trash = useCallback(async (ids: string[]) => {
     const done: string[] = [];
+    const by = new Map(itemsRef.current.map((x) => [x.id, x]));
     try {
       for (let i = 0; i < ids.length; i += 5) {
         const batch = ids.slice(i, i + 5);
-        if (!DEMO) await Promise.all(batch.map((id) => trashFile(id)));
-        done.push(...batch);
+        if (!DEMO) {
+          const local = batch.filter((id) => by.get(id)?.local);
+          for (const id of local) { await moveToTrash(by.get(id)!); done.push(id); }
+          await Promise.all(batch.filter((id) => !by.get(id)?.local).map((id) => trashFile(id)));
+          done.push(...batch.filter((id) => !by.get(id)?.local));
+        } else done.push(...batch);
       }
     } finally {
       await lib.removeItems(done);
@@ -112,6 +171,8 @@ export default function App() {
     getFile(it.id).then((f) => { const n = toItem(f); if (n?.thumb && n.thumb !== it.thumb) { lib.putItems([n]); setItems((prev) => prev.map((x) => (x.id === n.id ? n : x))); } }).catch(() => {});
   }, [signedIn]);
 
+  const isLocal = meta.source === 'local';
+  const needsReopen = !DEMO && isLocal && items.length > 0 && !isOpen() && !scanning;
   const open = useCallback((list: Item[], i: number) => setViewer({ list, i }), []);
   const nav = (v: View, label: string, n?: number) => (
     <button className={`nav ${view === v ? 'on' : ''}`} onClick={() => setView(v)}>{label}{n != null && <span>{n.toLocaleString()}</span>}</button>
@@ -129,12 +190,12 @@ export default function App() {
         {nav('folders', 'Folders')}
         {nav('duplicates', 'Duplicates', dupCount)}
         <div className="grow" />
-        {nav('setup', 'Drive & scan')}
-        <div className="who">{DEMO ? 'Sample photos' : signedIn ? 'Connected to Drive' : 'Not connected'}</div>
+        {nav('setup', 'Choose photos')}
+        <div className="who">{DEMO ? 'Sample photos' : isLocal ? `Folder: ${meta.localName ?? ''}` : signedIn ? 'Connected to Drive' : 'Not connected'}</div>
       </nav>
       <div className="main">
         <header className="top">
-          <h1>{{ photos: 'Photos', places: 'Places', folders: 'Folders', duplicates: 'Duplicates', setup: 'Drive & scan' }[view]}</h1>
+          <h1>{{ photos: 'Photos', places: 'Places', folders: 'Folders', duplicates: 'Duplicates', setup: 'Choose photos' }[view]}</h1>
           {view !== 'setup' && view !== 'folders' && (
             <>
               <input className="search" type="search" id="q" placeholder="Search names, folders, camera…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
@@ -160,11 +221,12 @@ export default function App() {
           ) : <div />}
           <main className="content">
             {error && <p className="notice">{error}</p>}
-            {view === 'photos' && (items.length ? <MonthGrid items={shown} onOpen={open} onBroken={onBroken} /> : <div className="panel"><h2>No photos yet</h2><p className="muted">Connect Google Drive and choose which folders to scan.</p><div className="row"><button className="btn primary" onClick={() => setView('setup')}>Set up</button></div></div>)}
+            {needsReopen && view !== 'setup' && <div className="notice row" style={{ marginBottom: 12 }}><span>To show the pictures, the browser needs your OK to open “{meta.localName}” again.</span><button className="btn primary" onClick={reopen}>Open folder</button></div>}
+            {view === 'photos' && (items.length ? <MonthGrid items={shown} onOpen={open} onBroken={onBroken} /> : <div className="panel"><h2>No photos yet</h2><p className="muted">Choose a folder with photos to get started.</p><div className="row"><button className="btn primary" onClick={() => setView('setup')}>Choose folder</button></div></div>)}
             {view === 'places' && <Places items={shown} onOpen={open} />}
             {view === 'folders' && <Folders folders={folders} items={items} roots={meta.roots.length ? meta.roots : fx.children(undefined)} children={fx.children} onPick={(f) => { setFilters({ ...emptyFilters, folderId: f.id }); setShowFilters(true); setView('photos'); }} />}
-            {view === 'duplicates' && <Duplicates items={shown} pathOf={fx.pathOf} onTrash={trash} onOpen={open} readOnly={!DEMO && !signedIn} />}
-            {view === 'setup' && <Setup demo={DEMO} roots={meta.roots} signedIn={signedIn} setSignedIn={setSignedIn} onScan={scan} scanning={scanning} progress={progress} onStop={() => { stopRef.current.stop = true; }} lastScan={meta.lastScan} onClear={async () => { await lib.clear(); setItems([]); setFolders([]); setMeta({ roots: [] }); }} />}
+            {view === 'duplicates' && <Duplicates items={shown} pathOf={fx.pathOf} onTrash={trash} onOpen={open} readOnly={!DEMO && (isLocal ? !canWrite || needsReopen : !signedIn)} local={isLocal} />}
+            {view === 'setup' && <Setup demo={DEMO} source={meta.source} localName={meta.localName} onChooseFolder={chooseFolder} onChooseFiles={chooseFiles} roots={meta.source === 'drive' ? meta.roots : []} signedIn={signedIn} setSignedIn={setSignedIn} onScan={scan} scanning={scanning} progress={progress} onStop={() => { stopRef.current.stop = true; }} lastScan={meta.lastScan} onClear={async () => { await lib.clear(); setItems([]); setFolders([]); setMeta({ roots: [] }); }} />}
           </main>
         </div>
       </div>

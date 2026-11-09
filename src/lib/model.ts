@@ -36,7 +36,7 @@ export interface Item {
   folderId?: string;
   /** ISO date-time the photo or video was taken, best available source. */
   takenAt?: string;
-  takenFrom: 'camera' | 'filename' | 'upload';
+  takenFrom: 'camera' | 'filename' | 'upload' | 'file';
   width?: number;
   height?: number;
   camera?: string;
@@ -46,6 +46,10 @@ export interface Item {
   thumb?: string;
   link?: string;
   tags: string[];
+  /** Set for files read from a folder on this computer. */
+  local?: boolean;
+  /** Local files: last-modified time, to skip re-reading unchanged files. */
+  mtime?: number;
 }
 
 export interface Folder {
@@ -117,6 +121,58 @@ export function toItem(f: DriveFile): Item | null {
   };
 }
 
+const MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic', heif: 'image/heif',
+  bmp: 'image/bmp', tif: 'image/tiff', tiff: 'image/tiff', avif: 'image/avif',
+  nef: 'image/x-nikon-nef', cr2: 'image/x-canon-cr2', cr3: 'image/x-canon-cr3', arw: 'image/x-sony-arw', dng: 'image/x-adobe-dng', orf: 'image/x-olympus-orf', rw2: 'image/x-panasonic-rw2', raf: 'image/x-fuji-raf',
+  mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', avi: 'video/x-msvideo', mkv: 'video/x-matroska', '3gp': 'video/3gpp', webm: 'video/webm', mts: 'video/mp2t', wmv: 'video/x-ms-wmv',
+};
+/** Media type from a file name, or '' when it isn't a photo or video. */
+export function mimeFromName(name: string): string {
+  return MIME[name.split('.').pop()?.toLowerCase() ?? ''] ?? '';
+}
+
+/** What the folder scan learns about one file on this computer. */
+export interface LocalFile {
+  path: string; // relative to the chosen folder's parent, e.g. "Photos/2015/a.jpg"
+  name: string;
+  size: number;
+  mtime: number;
+  folderId: string;
+  exif?: { time?: string; make?: string; model?: string; width?: number; height?: number; lat?: number; lon?: number };
+}
+
+export function localToItem(f: LocalFile): Item | null {
+  const mime = mimeFromName(f.name);
+  const kind = mime ? kindOf(f.name, mime) : null;
+  if (!kind) return null;
+  const e = f.exif ?? {};
+  const cam = exifToIso(e.time);
+  const fromName = cam ? undefined : dateFromName(f.name);
+  const hasLoc = typeof e.lat === 'number' && typeof e.lon === 'number' && isFinite(e.lat) && isFinite(e.lon) && !(e.lat === 0 && e.lon === 0);
+  const d = new Date(f.mtime);
+  const p = (n: number) => String(n).padStart(2, '0');
+  const fileDate = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  return {
+    id: 'local:' + f.path,
+    name: f.name,
+    kind,
+    mime,
+    size: f.size,
+    folderId: f.folderId,
+    takenAt: cam ?? fromName ?? fileDate,
+    takenFrom: cam ? 'camera' : fromName ? 'filename' : 'file',
+    width: e.width,
+    height: e.height,
+    camera: [e.make, e.model].filter(Boolean).join(' ').trim() || undefined,
+    lat: hasLoc ? e.lat : undefined,
+    lon: hasLoc ? e.lon : undefined,
+    tags: [],
+    local: true,
+    mtime: f.mtime,
+  };
+}
+
 /** Groups of exact copies: same content fingerprint (md5) from Drive. */
 export function exactDuplicates(items: Item[]): Item[][] {
   const by = new Map<string, Item[]>();
@@ -129,7 +185,6 @@ export function exactDuplicates(items: Item[]): Item[][] {
   return [...by.values()].filter((g) => g.length > 1).sort((a, b) => b[0].size * (b.length - 1) - a[0].size * (a.length - 1));
 }
 
-/** Which copy to keep: the one with the camera date, then the shortest folder path, then the oldest. */
 /** Which copy to keep: not WhatsApp, in a folder named for the photo's month, with a camera date, in the most specific folder. */
 export function pickKeeper(group: Item[], pathOf: (folderId?: string) => string): Item {
   const wa = (x: Item) => (/whatsapp/i.test(pathOf(x.folderId)) ? 1 : 0);
