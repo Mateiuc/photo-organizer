@@ -64,6 +64,7 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
       <section className="panel">
         <h2>Choose a folder with photos</h2>
         <p className="muted">Pick any folder: on this computer, on a USB disk or memory card, or a Google Drive, OneDrive or Dropbox folder synced to this PC. Subfolders are included. Nothing is uploaded and nothing is moved: the app only reads the files where they are.</p>
+        <p className="notice" style={{ margin: 0 }}>Photos in Google Drive? Use <b>“Or read Google Drive directly”</b> below instead. It reads dates, places and duplicates straight from Google without downloading your photos, so it's much faster and uses no disk space.</p>
         {source === 'local' && localName && !scanning && <p>Current folder: <b>{localName}</b>{lastScan && <span className="muted"> · read {new Date(lastScan).toLocaleString()}</span>}</p>}
         {!scanning && (
           <div className="row">
