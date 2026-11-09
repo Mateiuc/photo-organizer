@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { clientId, listChildren, signIn, signOut, type ScanProgress } from '../drive/api';
+import { useEffect, useState } from 'react';
+import { clientId, listChildren, listComputers, signIn, signOut, type ScanProgress } from '../drive/api';
 import { canWrite, TRASH } from '../local/fs';
 import type { Folder } from '../lib/model';
 
@@ -58,6 +58,12 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
     </>
   );
   const [showDrive, setShowDrive] = useState(source === 'drive');
+  // Backed-up computers ("Computers" in Drive) sit outside My Drive, so they're listed separately.
+  const [computers, setComputers] = useState<Folder[] | null>(null);
+  useEffect(() => {
+    if (!signedIn || !showDrive || computers) return;
+    listComputers().then((c) => setComputers(c.map((f) => ({ id: f.id, name: f.name }))), () => setComputers([]));
+  }, [signedIn, showDrive, computers]);
   return (
     <div className="stack">
       {demo && <div className="notice">You're looking at sample photos. Remove <code>?demo</code> from the address to use your own.</div>}
@@ -107,7 +113,11 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
         <h2>2 · Choose folders to include</h2>
         <p className="muted">Tick the folders the app should look at. Ticking a folder includes all its subfolders. Nothing is moved.</p>
         {signedIn ? (
-          <div className="tree"><PickerNode f={{ id: 'root', name: 'My Drive' }} depth={0} selected={selected} toggle={toggle} /></div>
+          <div className="tree">
+            <PickerNode f={{ id: 'root', name: 'My Drive' }} depth={0} selected={selected} toggle={toggle} />
+            {computers?.map((c) => <PickerNode key={c.id} f={c} depth={0} selected={selected} toggle={toggle} />)}
+            <PickerNode f={{ id: 'shared', name: 'Shared with me' }} depth={0} selected={selected} toggle={toggle} />
+          </div>
         ) : <p className="muted">Sign in first.</p>}
         <div className="row"><span className="muted">{selected.size ? [...selected.values()].map((f) => f.name).join(', ') : 'No folders chosen yet'}</span></div>
       </div>

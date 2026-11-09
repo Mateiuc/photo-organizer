@@ -110,12 +110,32 @@ export async function downloadFile(id: string): Promise<Blob> {
   return r.blob();
 }
 
+/**
+ * Folders backed up from computers (Google Drive for desktop, shown under "Computers" in Drive).
+ * They live outside My Drive and have no parent folder, which is how they're found.
+ */
+export async function listComputers(): Promise<DriveFile[]> {
+  const out: DriveFile[] = [];
+  let pageToken: string | undefined;
+  const q = `mimeType = '${FOLDER_MIME}' and 'me' in owners and trashed = false`;
+  do {
+    const p = new URLSearchParams({ q, pageSize: '1000', fields: 'nextPageToken,files(id,name,parents)' });
+    if (pageToken) p.set('pageToken', pageToken);
+    const page = await call<ListPage>(`/files?${p}`);
+    out.push(...page.files.filter((f) => !f.parents?.length));
+    pageToken = page.nextPageToken;
+  } while (pageToken);
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 interface ListPage { files: DriveFile[]; nextPageToken?: string }
 
 export async function listChildren(parentId: string, onlyFolders = false): Promise<DriveFile[]> {
   const out: DriveFile[] = [];
   let pageToken: string | undefined;
-  const q = `'${parentId}' in parents and trashed = false` + (onlyFolders ? ` and mimeType = '${FOLDER_MIME}'` : '');
+  // 'shared' is the "Shared with me" list, which isn't a real folder.
+  const where = parentId === 'shared' ? 'sharedWithMe = true' : `'${parentId}' in parents`;
+  const q = `${where} and trashed = false` + (onlyFolders ? ` and mimeType = '${FOLDER_MIME}'` : '');
   do {
     const p = new URLSearchParams({ q, pageSize: '1000', fields: `nextPageToken,files(${FILE_FIELDS})`, orderBy: 'name' });
     if (pageToken) p.set('pageToken', pageToken);
