@@ -49,5 +49,7 @@ export function demoLibrary(): { items: Item[]; folders: Folder[] } {
   add('wai', 2019, 3, 40);
   // a few exact copies, as phone backups often have
   for (const src of items.slice(5, 11)) items.push({ ...src, id: src.id + '-copy', folderId: 'cam21' });
+  // and a few re-saved copies that lost their camera data (smaller file, no date, place or camera)
+  for (const src of items.slice(70, 74)) items.push({ ...src, id: src.id + '-resaved', folderId: 'wai', md5: src.md5 + 'r', size: Math.round(src.size / 12), takenFrom: 'filename', camera: undefined, lat: undefined, lon: undefined, width: 1600, height: 1200 });
   return { items, folders };
 }

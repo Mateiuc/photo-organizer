@@ -185,18 +185,46 @@ export function exactDuplicates(items: Item[]): Item[][] {
   return [...by.values()].filter((g) => g.length > 1).sort((a, b) => b[0].size * (b.length - 1) - a[0].size * (a.length - 1));
 }
 
-/** Which copy to keep: not WhatsApp, in a folder named for the photo's month, with a camera date, in the most specific folder. */
+/** How much of the camera's information a file still has. Copies sent through chat apps or re-saved often lose it. */
+export function metaScore(x: Item): number {
+  return (x.takenFrom === 'camera' ? 8 : 0) + (x.lat != null ? 4 : 0) + (x.camera ? 2 : 0) + (x.width ? 1 : 0);
+}
+export const hasCameraData = (x: Item) => x.takenFrom === 'camera' || !!x.camera;
+
+/** Which copy to keep: the one with the most camera information, not WhatsApp, in a folder named for the photo's month, in the most specific folder. */
 export function pickKeeper(group: Item[], pathOf: (folderId?: string) => string): Item {
   const wa = (x: Item) => (/whatsapp/i.test(pathOf(x.folderId)) ? 1 : 0);
   const month = (x: Item) => {
     const m = x.takenAt?.slice(0, 7);
     return m && pathOf(x.folderId).includes(m) ? 0 : 1;
   };
-  const cam = (x: Item) => (x.takenFrom === 'camera' ? 0 : 1);
   const depth = (x: Item) => pathOf(x.folderId).split('/').length;
   return [...group].sort((a, b) =>
-    wa(a) - wa(b) || month(a) - month(b) || cam(a) - cam(b) || depth(b) - depth(a) || a.name.localeCompare(b.name),
+    metaScore(b) - metaScore(a) || wa(a) - wa(b) || month(a) - month(b) || b.size - a.size || depth(b) - depth(a) || a.name.localeCompare(b.name),
   )[0];
+}
+
+/**
+ * Probably the same photo, but NOT identical files: same file name, or same camera moment with the same camera
+ * and picture size. Catches copies that were re-saved, resized or lost their camera data. Exact copies are left out.
+ */
+export function possibleCopies(items: Item[]): Item[][] {
+  const parent = new Map<string, string>();
+  const find = (x: string): string => { let r = x; while (parent.get(r) !== r) r = parent.get(r)!; parent.set(x, r); return r; };
+  const join = (a: string, b: string) => parent.set(find(a), find(b));
+  const byKey = new Map<string, string>();
+  const link = (key: string, id: string) => { const o = byKey.get(key); if (o) join(id, o); else byKey.set(key, id); };
+  for (const it of items) {
+    if (it.kind === 'screenshot') continue;
+    parent.set(it.id, it.id);
+    const stem = it.name.toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/\s*\(\d+\)$/, '').replace(/[-_ ]copy$/, '');
+    if (!/^(img|dsc|dscn|dsc_|image|photo|video|vid|mov|p)?[_-]?\d{1,5}$/.test(stem)) link('n:' + it.kind + ':' + stem, it.id); // skip generic camera counters
+    if (it.takenFrom === 'camera' && it.takenAt && it.camera && it.width) link(`t:${it.takenAt}:${it.camera}:${Math.max(it.width, it.height ?? 0)}`, it.id);
+  }
+  const groups = new Map<string, Item[]>();
+  for (const it of items) { if (!parent.has(it.id)) continue; const r = find(it.id); const g = groups.get(r); g ? g.push(it) : groups.set(r, [it]); }
+  return [...groups.values()].filter((g) => g.length > 1 && new Set(g.map((x) => x.md5 ? x.md5 + ':' + x.size : x.id)).size > 1)
+    .sort((a, b) => b.length - a.length || (b[0].takenAt ?? '').localeCompare(a[0].takenAt ?? ''));
 }
 
 export interface Filters {

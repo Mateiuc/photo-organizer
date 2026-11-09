@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
+import { possibleCopies, localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
 
 describe('dates', () => {
   it('reads camera time', () => expect(exifToIso('2017:07:01 17:25:23')).toBe('2017-07-01T17:25:23'));
@@ -73,4 +73,23 @@ describe('local files', () => {
     expect(localToItem({ path: 'x/clip.mov', name: 'clip.mov', size: 1, mtime: Date.UTC(2019, 0, 5), folderId: 'local:x' })!.takenFrom).toBe('file');
   });
   it('skips other files', () => expect(localToItem({ path: 'x/a.pdf', name: 'a.pdf', size: 1, mtime: 0, folderId: 'x' })).toBeNull());
+});
+
+describe('copies that lost camera data', () => {
+  const p = (id?: string) => (id === 'wa' ? 'Media/WhatsApp Images' : id === 't' ? 'Trips/2018-11' : 'Backup');
+  it('keeps the copy that still has camera data', () => {
+    const full = base({ id: 'full', folderId: 'b', takenFrom: 'camera', camera: 'Sony G8441', lat: 25, lon: -81, width: 5056, height: 3792 });
+    const bare = base({ id: 'bare', folderId: 't', takenFrom: 'filename', takenAt: '2018-11-01T14:52:36' });
+    expect(pickKeeper([bare, full], p).id).toBe('full');
+  });
+  it('groups re-saved copies by name, not generic counters', () => {
+    const a = base({ id: 'a', name: '2018_11_01-14.52.36.jpg', md5: '1', size: 3e6 });
+    const b = base({ id: 'b', name: '2018_11_01-14.52.36.jpg', md5: '2', size: 2e5 });
+    const c = base({ id: 'c', name: 'IMG_0001.jpg', md5: '3' }), d = base({ id: 'd', name: 'IMG_0001.jpg', md5: '4' });
+    const g = possibleCopies([a, b, c, d]);
+    expect(g.map((x) => x.map((i) => i.id).sort())).toEqual([['a', 'b']]);
+  });
+  it('leaves exact copies to the exact list', () => {
+    expect(possibleCopies([base({ id: 'a', name: 'x1.jpg', md5: '1' }), base({ id: 'b', name: 'x1.jpg', md5: '1' })])).toEqual([]);
+  });
 });
