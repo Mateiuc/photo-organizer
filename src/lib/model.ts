@@ -192,7 +192,26 @@ export function metaScore(x: Item): number {
 /** Videos rarely carry camera data that Drive or the browser can read, so they always count as having it. */
 export const hasCameraData = (x: Item) => x.kind === 'video' || x.takenFrom === 'camera' || !!x.camera;
 
-/** Which copy to keep: the one with the most camera information, not WhatsApp, in a folder named for the photo's month, in the most specific folder. */
+/** 1 when the file name looks like a copy: "photo (1).jpg", "photo - Copy.jpg", "photo copie.jpg", "photo~2.jpg". */
+export function copyMark(name: string): number {
+  const stem = name.replace(/\.[a-z0-9]+$/i, '');
+  return /(\(\d+\)|\bcop(y|ie|ia)\b|kopie|~\d+)\s*$/i.test(stem) || /\bcop(y|ie|ia) of\b/i.test(stem) ? 1 : 0;
+}
+
+/**
+ * 1 when the folder is named for a date (2017, 2017-07, 2017_07) that doesn't match when the photo was taken,
+ * like a July 2020 photo in a "2017-07" folder.
+ */
+export function misplaced(x: Item, pathOf: (folderId?: string) => string): number {
+  if (!x.takenAt || x.takenFrom === 'upload' || x.takenFrom === 'file') return 0;
+  const dates = [...pathOf(x.folderId).matchAll(/(?:^|[^\d])((?:19|20)\d\d)(?:[-_. ](0[1-9]|1[0-2]))?(?=[^\d]|$)/g)];
+  const last = dates[dates.length - 1];
+  if (!last) return 0;
+  if (last[1] !== x.takenAt.slice(0, 4)) return 1;
+  return last[2] && last[2] !== x.takenAt.slice(5, 7) ? 1 : 0;
+}
+
+/** Which copy to keep, in order: most camera information, in a folder that matches its date, a name that isn't a copy, not WhatsApp, in a folder named for its month, the biggest file, the most specific folder. */
 export function pickKeeper(group: Item[], pathOf: (folderId?: string) => string): Item {
   const wa = (x: Item) => (/whatsapp/i.test(pathOf(x.folderId)) ? 1 : 0);
   const month = (x: Item) => {
@@ -201,8 +220,18 @@ export function pickKeeper(group: Item[], pathOf: (folderId?: string) => string)
   };
   const depth = (x: Item) => pathOf(x.folderId).split('/').length;
   return [...group].sort((a, b) =>
-    metaScore(b) - metaScore(a) || wa(a) - wa(b) || month(a) - month(b) || b.size - a.size || depth(b) - depth(a) || a.name.localeCompare(b.name),
+    metaScore(b) - metaScore(a) || misplaced(a, pathOf) - misplaced(b, pathOf) || copyMark(a.name) - copyMark(b.name) ||
+    wa(a) - wa(b) || month(a) - month(b) || b.size - a.size || depth(b) - depth(a) || a.name.localeCompare(b.name),
   )[0];
+}
+
+/** Why a copy is clearly worse than the one kept, or '' when it's only a matter of choice. */
+export function worseReason(x: Item, keep: Item, pathOf: (folderId?: string) => string): string {
+  if (x === keep) return '';
+  if (!hasCameraData(x) && hasCameraData(keep)) return 'lost camera data';
+  if (misplaced(x, pathOf) && !misplaced(keep, pathOf)) return 'folder date doesn\'t match the photo';
+  if (copyMark(x.name) > copyMark(keep.name)) return 'name looks like a copy';
+  return '';
 }
 
 /**

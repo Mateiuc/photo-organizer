@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getFile, scanFolders, trashFile, type ScanProgress } from './drive/api';
+import { getFile, NEEDS_SIGN_IN, prepareSignIn, scanFolders, signIn, trashFile, type ScanProgress } from './drive/api';
 import { demoLibrary } from './lib/demo';
 import { applyFilters, emptyFilters, exactDuplicates, toItem, type Filters, type Folder, type Item, type Kind } from './lib/model';
 import { folderIndex, Library, type Meta } from './lib/store';
@@ -34,6 +34,7 @@ export default function App() {
   const [error, setError] = useState('');
   const stopRef = useRef({ stop: false });
 
+  useEffect(() => { if (signedIn && !DEMO) prepareSignIn(); }, [signedIn]);
   useEffect(() => {
     (async () => {
       if (DEMO) {
@@ -113,6 +114,7 @@ export default function App() {
   }, []);
 
   const scan = useCallback(async (roots: Folder[]) => {
+    try { await signIn(); } catch (e) { setError((e as Error).message); return; } // first, while the click still allows a popup
     const m: Meta = { ...meta, roots, source: 'drive' };
     setMeta(m); await lib.setMeta(m);
     await runScan(m, async (onFolder) => {
@@ -156,6 +158,7 @@ export default function App() {
   const trash = useCallback(async (ids: string[]) => {
     const done: string[] = [];
     const by = new Map(itemsRef.current.map((x) => [x.id, x]));
+    if (!DEMO && ids.some((id) => !by.get(id)?.local)) await signIn(); // first, while the click still allows a popup
     try {
       for (let i = 0; i < ids.length; i += 5) {
         const batch = ids.slice(i, i + 5);
@@ -177,7 +180,7 @@ export default function App() {
   const onBroken = useCallback((it: Item) => {
     if (DEMO || !signedIn || refreshing.current.has(it.id)) return;
     refreshing.current.add(it.id);
-    getFile(it.id).then((f) => { const n = toItem(f); if (n?.thumb && n.thumb !== it.thumb) { lib.putItems([n]); setItems((prev) => prev.map((x) => (x.id === n.id ? n : x))); } }).catch(() => {});
+    getFile(it.id).then((f) => { const t = toItem(f)?.thumb; if (t && t !== it.thumb) { const n = { ...it, thumb: t }; lib.putItems([n]); setItems((prev) => prev.map((x) => (x.id === n.id ? n : x))); } }).catch((e) => { refreshing.current.delete(it.id); if ((e as Error).message === NEEDS_SIGN_IN) setError(NEEDS_SIGN_IN); });
   }, [signedIn]);
 
   const isLocal = meta.source === 'local';
@@ -229,7 +232,9 @@ export default function App() {
             </div>
           ) : <div />}
           <main className="content">
-            {error && <p className="notice">{error}</p>}
+            {error && (error === NEEDS_SIGN_IN
+              ? <div className="notice row" style={{ marginBottom: 12 }}><span>{error}</span><button className="btn primary" onClick={() => signIn().then(() => { setSignedIn(true); setError(''); }, (e) => setError((e as Error).message))}>Sign in again</button></div>
+              : <p className="notice">{error}</p>)}
             {needsReopen && view !== 'setup' && <div className="notice row" style={{ marginBottom: 12 }}><span>To show the pictures, the browser needs your OK to open “{meta.localName}” again.</span><button className="btn primary" onClick={reopen}>Open folder</button></div>}
             {view === 'photos' && (items.length ? <MonthGrid items={shown} onOpen={open} onBroken={onBroken} /> : <div className="panel"><h2>No photos yet</h2><p className="muted">Choose a folder with photos to get started.</p><div className="row"><button className="btn primary" onClick={() => setView('setup')}>Choose folder</button></div></div>)}
             {view === 'places' && <Places items={shown} onOpen={open} />}

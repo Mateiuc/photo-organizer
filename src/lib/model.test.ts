@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { possibleCopies, localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
+import { copyMark, misplaced, worseReason, possibleCopies, localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
 
 describe('dates', () => {
   it('reads camera time', () => expect(exifToIso('2017:07:01 17:25:23')).toBe('2017-07-01T17:25:23'));
@@ -91,5 +91,28 @@ describe('copies that lost camera data', () => {
   });
   it('leaves exact copies to the exact list', () => {
     expect(possibleCopies([base({ id: 'a', name: 'x1.jpg', md5: '1' }), base({ id: 'b', name: 'x1.jpg', md5: '1' })])).toEqual([]);
+  });
+});
+
+describe('copy names and wrong folders', () => {
+  it('spots copy names', () => {
+    expect(['a (1).jpg', 'a - Copy.jpg', 'a copie.jpg', 'a~2.jpg', 'Copy of a.jpg'].map(copyMark)).toEqual([1, 1, 1, 1, 1]);
+    expect(['2020_07_29-13.33.13.jpg', 'IMG_0001.jpg', 'copycat.jpg'].map(copyMark)).toEqual([0, 0, 0]);
+  });
+  const paths: Record<string, string> = { w: 'My Drive/_Vacante/Romania 2020 august/2017-07', r: 'My Drive/_Vacante/Romania 2020 august/2020-07', y: 'Pics/2020', n: 'Pics/Family' };
+  const p = (id?: string) => paths[id!];
+  const photo = (folderId: string, o: Partial<Item> = {}) => base({ id: folderId, folderId, takenAt: '2020-07-29T13:33:13', takenFrom: 'camera', camera: 'samsung', ...o });
+  it('spots photos in a folder for another date', () => {
+    expect(['w', 'r', 'y', 'n'].map((f) => misplaced(photo(f), p))).toEqual([1, 0, 0, 0]);
+  });
+  it('keeps the copy in the right folder and says why the other goes', () => {
+    const wrong = photo('w'), right = photo('r');
+    expect(pickKeeper([wrong, right], p)).toBe(right);
+    expect(worseReason(wrong, right, p)).toMatch(/folder date/);
+  });
+  it('keeps the original over "(1)" copies', () => {
+    const a = photo('n', { id: 'a', name: 'x.jpg' }), b = photo('n', { id: 'b', name: 'x (1).jpg' });
+    expect(pickKeeper([b, a], p)).toBe(a);
+    expect(worseReason(b, a, p)).toMatch(/copy/);
   });
 });

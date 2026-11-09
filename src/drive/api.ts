@@ -15,6 +15,11 @@ declare global {
 }
 
 let token: { value: string; exp: number } | null = null;
+// Keep the token (valid about an hour) across page reloads, so a refresh doesn't need a new sign-in popup.
+try { const t = JSON.parse(sessionStorage.getItem('po.token') ?? 'null'); if (t && t.exp > Date.now() + 60_000) token = t; } catch {}
+
+/** Thrown when Drive needs a new sign-in. Browsers only allow the sign-in popup right after a click. */
+export const NEEDS_SIGN_IN = 'Your Google sign-in has expired. Click “Sign in again” to continue.';
 let tokenClient: any = null;
 
 // Cip's Google OAuth Client ID (public by design; the client secret is never used in a browser app).
@@ -27,6 +32,9 @@ export function clientId(): string {
   } catch {}
   return (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || DEFAULT_CLIENT_ID;
 }
+
+/** Load Google's sign-in script early, so a later click can open the popup straight away. */
+export function prepareSignIn() { loadGis().catch(() => {}); }
 
 function loadGis(): Promise<void> {
   if (window.google?.accounts?.oauth2) return Promise.resolve();
@@ -53,6 +61,7 @@ export async function signIn(prompt: '' | 'consent' = ''): Promise<string> {
       callback: (r: any) => {
         if (r.error) return rej(new Error(r.error_description || r.error));
         token = { value: r.access_token, exp: Date.now() + Number(r.expires_in) * 1000 };
+        try { sessionStorage.setItem('po.token', JSON.stringify(token)); } catch {}
         try { localStorage.setItem('po.signedIn', '1'); } catch {}
         res(token.value);
       },
@@ -65,15 +74,17 @@ export async function signIn(prompt: '' | 'consent' = ''): Promise<string> {
 export function signOut() {
   if (token && window.google?.accounts?.oauth2) window.google.accounts.oauth2.revoke(token.value, () => {});
   token = null;
-  try { localStorage.removeItem('po.signedIn'); } catch {}
+  try { localStorage.removeItem('po.signedIn'); sessionStorage.removeItem('po.token'); } catch {}
 }
 
 async function call<T>(path: string, init: RequestInit = {}, retry = 2): Promise<T> {
-  const t = await signIn();
+  // Never open the popup from here: without a click the browser blocks it ("Failed to open popup window").
+  if (!token || token.exp < Date.now() + 60_000) throw new Error(NEEDS_SIGN_IN);
+  const t = token.value;
   const r = await fetch(API + path, { ...init, headers: { ...(init.headers ?? {}), Authorization: `Bearer ${t}` } });
-  if (r.status === 401 && retry > 0) {
+  if (r.status === 401) {
     token = null;
-    return call(path, init, retry - 1);
+    throw new Error(NEEDS_SIGN_IN);
   }
   if ((r.status === 429 || r.status >= 500 || r.status === 403) && retry > 0) {
     const body = r.status === 403 ? await r.clone().text() : '';
