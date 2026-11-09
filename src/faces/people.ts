@@ -25,11 +25,13 @@ export interface PeopleState {
   faces: Map<string, Face & { person: string }>;
   scanned: Set<string>;
   run: { running: boolean; done: number; total: number; current?: string; error?: string; slow?: boolean };
+  /** Goes up on every change, so views know to recompute. */
+  v: number;
 }
-const state: PeopleState = { loaded: false, people: new Map(), faces: new Map(), scanned: new Set(), run: { running: false, done: 0, total: 0 } };
+const state: PeopleState = { loaded: false, people: new Map(), faces: new Map(), scanned: new Set(), run: { running: false, done: 0, total: 0 }, v: 0 };
 const listeners = new Set<() => void>();
 let version = 0;
-const notify = () => { version++; listeners.forEach((f) => f()); };
+const notify = () => { state.v = ++version; listeners.forEach((f) => f()); };
 
 async function load() {
   if (state.loaded) return;
@@ -67,28 +69,51 @@ export function namesByItem(): Map<string, string[]> {
 }
 
 // ---------- editing people ----------
-export async function rename(id: string, name: string) {
+/** Each edit returns a way to take it back (for "Undo"). */
+export type Undo = () => Promise<void>;
+const noUndo: Undo = async () => {};
+
+export async function rename(id: string, name: string): Promise<Undo> {
   const p = state.people.get(id);
-  if (!p) return;
+  if (!p) return noUndo;
   const np = { ...p, name: name.trim() || undefined };
   state.people.set(id, np);
   await (await db()).put('people', np);
   notify();
+  return async () => { if (state.people.has(id)) { state.people.set(id, p); await (await db()).put('people', p); notify(); } };
 }
 
-export async function mergeInto(fromId: string, intoId: string) {
+/** Joins person `fromId` into `intoId` (they're the same person). */
+export async function mergeInto(fromId: string, intoId: string): Promise<Undo> {
   const from = state.people.get(fromId), into = state.people.get(intoId);
-  if (!from || !into || from === into) return;
+  if (!from || !into || from === into) return noUndo;
   const np = mergePeople(from, into);
+  const keys: string[] = [];
+  for (const f of state.faces.values()) if (f.person === fromId) keys.push(f.key);
+  await save([np], [fromId], keys, intoId);
+  return async () => {
+    // put both people back as they were, and give the moved faces back
+    const now = state.people.get(intoId);
+    if (!now) return;
+    await save([from, { ...into, name: now.name === np.name ? into.name : now.name }], [], keys, fromId);
+  };
+}
+
+async function save(put: Person[], del: string[], faceKeys: string[], faceOwner: string) {
   const d = await db();
   const tx = d.transaction(['people', 'faces'], 'readwrite');
-  const moved: (Face & { person: string })[] = [];
-  for (const f of state.faces.values()) if (f.person === fromId) { const nf = { ...f, person: intoId }; moved.push(nf); }
-  moved.forEach((f) => { state.faces.set(f.key, f); tx.objectStore('faces').put(f); });
-  state.people.set(intoId, np); state.people.delete(fromId);
-  tx.objectStore('people').put(np); tx.objectStore('people').delete(fromId);
+  for (const k of faceKeys) { const f = state.faces.get(k); if (f) { const nf = { ...f, person: faceOwner }; state.faces.set(k, nf); tx.objectStore('faces').put(nf); } }
+  for (const p of put) { state.people.set(p.id, p); tx.objectStore('people').put(p); }
+  for (const id of del) { state.people.delete(id); tx.objectStore('people').delete(id); }
   await tx.done;
   notify();
+}
+
+/** Names a person. If someone already has that name, the two are joined instead. */
+export async function nameAs(id: string, name: string): Promise<Undo> {
+  const n = name.trim().toLowerCase();
+  const same = n ? [...state.people.values()].find((p) => p.id !== id && p.name?.toLowerCase() === n) : undefined;
+  return same ? mergeInto(id, same.id) : rename(id, name);
 }
 
 /** "Not this person": the face becomes its own new person. */

@@ -63,3 +63,22 @@ export function merge(from: Person, into: Person): Person {
 export function without(p: Person, face: Face): Person {
   return { ...p, sum: p.sum.map((v, i) => v - face.d[i]), n: Math.max(0, p.n - 1) };
 }
+
+/** The `k` people whose average face is nearest to `d`, nearest first, with their distance. */
+export function closest<T extends { c: ArrayLike<number> }>(cands: T[], d: ArrayLike<number>, k = 3, skip?: (c: T) => boolean): { c: T; dist: number }[] {
+  const best: { c: T; dist: number }[] = [];
+  for (const c of cands) {
+    if (skip?.(c)) continue;
+    let s = 0;
+    for (let i = 0; i < d.length; i++) { const x = c.c[i] - d[i]; s += x * x; }
+    if (best.length === k && s >= best[k - 1].dist) continue;
+    best.push({ c, dist: s });
+    best.sort((a, b) => a.dist - b.dist);
+    if (best.length > k) best.pop();
+  }
+  return best.map((b) => ({ c: b.c, dist: Math.sqrt(b.dist) }));
+}
+
+/** Below this, a suggested match is very likely the same person; above LIKELY it's only a weak guess. */
+export const SURE = 0.5;
+export const LIKELY = 0.6;
