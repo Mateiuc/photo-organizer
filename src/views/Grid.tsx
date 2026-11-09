@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { fmtDuration, monthLabel, sizedThumb, type Item } from '../lib/model';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { fmtDuration, monthLabel, thumbUrl, type Item } from '../lib/model';
 import { useLocalThumb } from '../local/thumbs';
+import { directFailed, helperPicture, viaHelperOnly } from '../gphotos/api';
 
 const noPreview = (item: Item) => <span className="ph">{item.kind === 'raw' ? 'RAW · no preview' : item.name}</span>;
 
@@ -20,11 +21,53 @@ function LocalPreview({ item }: { item: Item }) {
   return <span ref={ref} className="ph">{url === undefined ? noPreview(item).props.children : ''}</span>;
 }
 
-/** The picture inside a tile, for Drive files and files on this computer. */
+/** Shows when the element scrolls near the screen. */
+function useVisible(ref: RefObject<Element>, on = true) {
+  const [vis, setVis] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !on) return;
+    const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) { setVis(true); io.disconnect(); } }, { rootMargin: '400px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [ref, on]);
+  return vis;
+}
+
+/**
+ * A Google Photos item: Google's preview link is tried directly. If the browser won't load it, the helper
+ * add-on fetches it in the Google Photos tab, and from then on every preview goes through the add-on.
+ */
+export function GpPicture({ item, px, className }: { item: Item; px: number; className?: string }) {
+  const url = thumbUrl(item, px);
+  const ref = useRef<HTMLSpanElement>(null);
+  const [src, setSrc] = useState<string | undefined>(() => (viaHelperOnly() ? undefined : url));
+  const [failed, setFailed] = useState(false);
+  const vis = useVisible(ref, !src && !failed);
+  useEffect(() => { setSrc(viaHelperOnly() ? undefined : url); setFailed(false); }, [url]);
+  useEffect(() => {
+    if (!vis || src || failed || !url) return;
+    let live = true;
+    helperPicture(url).then((d) => { if (live) d ? setSrc(d) : setFailed(true); });
+    return () => { live = false; };
+  }, [vis, src, failed, url]);
+  if (!url || failed) return noPreview(item);
+  if (!src) return <span ref={ref} className="ph" />;
+  return (
+    <img className={className} src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer"
+      onError={() => {
+        if (src !== url) { setFailed(true); return; }
+        helperPicture(url).then((d) => { if (d) { directFailed(); setSrc(d); } else setFailed(true); });
+      }} />
+  );
+}
+
+/** The picture inside a tile, for Drive, Google Photos and files on this computer. */
 export function Preview({ item, px = 320, onBroken }: { item: Item; px?: number; onBroken?: (it: Item) => void }) {
   const [bad, setBad] = useState(false);
   if (item.local) return <LocalPreview item={item} />;
-  const src = sizedThumb(item.thumb, px);
+  if (item.gp) return <GpPicture item={item} px={px} />;
+  const src = thumbUrl(item, px);
   return src && !bad
     ? <img src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => { setBad(true); onBroken?.(item); }} />
     : noPreview(item);

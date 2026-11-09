@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Photo Organizer helper",
+  "version": "0.1.0",
+  "description": "Lets the Photo Organizer app read your Google Photos library through your own signed-in Google Photos tab. Nothing is sent anywhere else.",
+  "minimum_chrome_version": "111",
+  "permissions": ["scripting"],
+  "host_permissions": ["https://photos.google.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://mateiuc.github.io/photo-organizer/*", "http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" }
+}

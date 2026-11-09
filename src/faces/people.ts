@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { openDB, type IDBPDatabase } from 'idb';
 import { downloadFile, NEEDS_SIGN_IN } from '../drive/api';
-import { sizedThumb, type Item } from '../lib/model';
+import { sizedThumb, thumbUrl, type Item } from '../lib/model';
+import { ask, NO_HELPER, NOT_SIGNED_IN, RELOAD } from '../gphotos/bridge';
 import { getLocalFile } from '../local/fs';
 import { assign, merge as mergePeople, without, type Face, type Person } from './cluster';
 
@@ -136,6 +137,11 @@ async function picture(it: Item): Promise<ImageBitmap | undefined> {
   let blob: Blob | undefined;
   if (it.local) blob = await getLocalFile(it.id);
   else if (DEMO) { if (it.thumb) blob = await (await fetch(it.thumb)).blob(); }
+  else if (it.gp) {
+    // Google Photos: the helper add-on fetches a 1024 px picture in the Google Photos tab.
+    const url = thumbUrl(it, SIZE);
+    if (url) blob = await (await fetch((await ask<{ dataUrl: string }>({ op: 'image', url }, 60000)).dataUrl)).blob();
+  }
   else {
     if (!previewsBlocked && it.thumb) {
       try {
@@ -199,7 +205,7 @@ export async function findFaces(items: Item[]) {
             });
         }
       } catch (e) {
-        if ((e as Error).message === NEEDS_SIGN_IN) throw e;
+        if ([NEEDS_SIGN_IN, NO_HELPER, NOT_SIGNED_IN, RELOAD].includes((e as Error).message)) throw e; // stop: nothing can be read
         // one unreadable photo shouldn't stop the run
       }
       const tx = d.transaction(['people', 'faces', 'scanned'], 'readwrite');

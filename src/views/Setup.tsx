@@ -2,6 +2,53 @@ import { useEffect, useState } from 'react';
 import { clientId, listChildren, listComputers, signIn, signOut, type ScanProgress } from '../drive/api';
 import { canWrite, TRASH } from '../local/fs';
 import type { Folder } from '../lib/model';
+import { connect } from '../gphotos/api';
+import { helperVersion } from '../gphotos/bridge';
+
+const EDGE = typeof navigator !== 'undefined' && /\bEdg\//.test(navigator.userAgent);
+const CHROMIUM = typeof navigator !== 'undefined' && /(Chrome|Chromium|Edg)\//.test(navigator.userAgent) && !/Mobile|Android/.test(navigator.userAgent);
+
+/** Google Photos through the helper add-on: install steps, then reading the library. */
+function GooglePhotos({ demo, scanning, progressBox, count, lastScan, onScan }: { demo: boolean; scanning: string | false; progressBox: React.ReactNode; count: number; lastScan?: string; onScan: () => Promise<void> }) {
+  const [helper, setHelper] = useState(helperVersion());
+  const [account, setAccount] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => { if (helper) return; const t = setInterval(() => setHelper(helperVersion()), 1500); return () => clearInterval(t); }, [helper]);
+  const page = EDGE ? 'edge://extensions' : 'chrome://extensions';
+  const go = async () => {
+    setErr(''); setBusy(true);
+    try { setAccount(await connect()); setBusy(false); await onScan(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  return (
+    <section className="panel">
+      <h2>Google Photos</h2>
+      <p className="muted">See and organize your Google Photos library without downloading it and without Google Takeout. A small helper add-on for Chrome or Edge lets the app use your own signed-in Google Photos tab, the same way the Google Photos website works. Your photos stay in Google Photos and nothing is sent anywhere else.</p>
+      {!helper && !CHROMIUM ? <p className="notice" style={{ margin: 0 }}>The helper add-on works in Chrome or Edge on a computer. Open this page there to use Google Photos.</p>
+        : !helper ? (
+          <>
+            <ol className="steps">
+              <li><a href={`${import.meta.env.BASE_URL}photo-organizer-helper.zip`} download>Download the helper add-on</a>, then unzip it into a folder you'll keep, for example Documents › Photo Organizer helper.</li>
+              <li>Open <code>{page}</code> in a new tab <button className="btn small" onClick={() => { navigator.clipboard?.writeText(page).then(() => setCopied(true), () => {}); }}>{copied ? 'Copied' : 'Copy'}</button> and switch on <b>Developer mode</b>.</li>
+              <li>Click <b>Load unpacked</b> and choose the folder you unzipped.</li>
+              <li>Come back to this page and reload it.</li>
+            </ol>
+            <div className="row"><button className="btn" onClick={() => location.reload()}>I've added it: reload this page</button></div>
+          </>
+        ) : (
+          <>
+            <p style={{ margin: 0 }}>Helper add-on is installed.{account && <> Google Photos account: <b>{account}</b>.</>}</p>
+            {count > 0 && scanning !== 'gp' && <p style={{ margin: 0 }}><b>{count.toLocaleString()}</b> photos and videos from Google Photos{lastScan && <span className="muted"> · read {new Date(lastScan).toLocaleString()}</span>}</p>}
+            {scanning === 'gp' && progressBox}
+            {!scanning && <div className="row"><button className="btn primary" disabled={demo || busy} onClick={go}>{busy ? 'Connecting…' : count ? 'Read Google Photos again' : 'Read my Google Photos'}</button></div>}
+            {err && <p className="error">{err}</p>}
+            <p className="muted">The app uses a Google Photos tab in this browser. If none is open, it opens one in the background: leave it open while the app works. Reading takes about a minute for every 10,000 photos and videos; after that the app opens instantly. Removing or changing photos in Google Photos isn't switched on yet.</p>
+          </>
+        )}
+    </section>
+  );
+}
 
 function PickerNode({ f, depth, selected, toggle, under = [] }: { f: Folder; depth: number; selected: Map<string, Folder>; toggle: (f: Folder, under: string[]) => void; under?: string[] }) {
   const inherited = under.some((id) => selected.has(id)); // a parent folder is ticked, so this one is included
@@ -29,10 +76,11 @@ function PickerNode({ f, depth, selected, toggle, under = [] }: { f: Folder; dep
   );
 }
 
-export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots, signedIn, setSignedIn, onScan, scanning, progress, onStop, lastScan, onClear, demo }: {
+export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots, signedIn, setSignedIn, onScan, scanning, progress, onStop, lastScan, onClear, demo, gpCount, gpLastScan, onScanGp }: {
   source?: 'local' | 'drive'; localName?: string; onChooseFolder: () => void; onChooseFiles: (f: File[]) => void;
-  roots: Folder[]; signedIn: boolean; setSignedIn: (b: boolean) => void; onScan: (roots: Folder[]) => void; scanning: boolean;
+  roots: Folder[]; signedIn: boolean; setSignedIn: (b: boolean) => void; onScan: (roots: Folder[]) => void; scanning: false | 'local' | 'drive' | 'gp';
   progress: ScanProgress | null; onStop: () => void; lastScan?: string; onClear: () => void; demo: boolean;
+  gpCount: number; gpLastScan?: string; onScanGp: () => Promise<void>;
 }) {
   const [cid, setCid] = useState(clientId());
   const [err, setErr] = useState('');
@@ -52,7 +100,7 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
   const doSignIn = async () => { setErr(''); try { saveCid(); await signIn('consent'); setSignedIn(true); } catch (e) { setErr((e as Error).message); } };
   const progressBox = scanning && progress && (
     <>
-      <div className="stats"><div><b>{progress.files.toLocaleString()}</b><span>photos and videos found</span></div>{progress.folders > 0 && <div><b>{progress.folders.toLocaleString()}</b><span>folders read</span></div>}</div>
+      <div className="stats"><div><b>{progress.files.toLocaleString()}</b><span>photos and videos found</span></div>{progress.folders > 0 && <div><b>{progress.folders.toLocaleString()}</b><span>{scanning === 'gp' ? 'albums read' : 'folders read'}</span></div>}</div>
       <div className="muted">Reading “{progress.current}”…</div>
       <div className="row"><button className="btn" onClick={onStop}>Stop</button></div>
     </>
@@ -84,10 +132,12 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
             )}
           </div>
         )}
-        {source !== 'drive' && progressBox}
+        {scanning === 'local' && progressBox}
         {!canWrite && <p className="muted">In this browser the app can look at photos but not move duplicates. Use Chrome or Edge on a computer for that.</p>}
         <p className="muted">Removing duplicates moves the extra copies into a folder called <code>{TRASH}</code> inside the folder you chose, so you can check them before deleting them yourself.</p>
       </section>
+
+      <GooglePhotos demo={demo} scanning={scanning} progressBox={progressBox} count={gpCount} lastScan={gpLastScan} onScan={onScanGp} />
 
       <section className="panel">
         <button className="btn" style={{ justifyContent: "flex-start", textAlign: "left" }} onClick={() => setShowDrive(!showDrive)} aria-expanded={showDrive}>{showDrive ? '▾' : '▸'} Or read Google Drive directly, without syncing it to this PC</button>
@@ -125,7 +175,7 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
       <div>
         <h2>3 · Scan</h2>
         <p className="muted">Reads the date, place, camera, size and type of every photo and video. 13,000 files take about 5 to 10 minutes. Run it again later to pick up new files.</p>
-        {source === 'drive' && progressBox}
+        {scanning === 'drive' && progressBox}
         <div className="row">
           {!scanning ? <button className="btn primary" disabled={!signedIn || !selected.size} onClick={() => onScan([...selected.values()])}>Scan {selected.size ? `${selected.size} folder${selected.size > 1 ? 's' : ''}` : ''}</button>
             : null}

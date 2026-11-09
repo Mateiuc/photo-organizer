@@ -9,6 +9,7 @@ export function Folders({ folders, items, roots, children, onPick }: { folders: 
     for (const it of items) {
       let cur = it.folderId, g = 0;
       while (cur && g++ < 40) { c.set(cur, (c.get(cur) ?? 0) + 1); cur = by.get(cur)?.parentId; }
+      for (const a of it.gp?.albums ?? []) c.set(a, (c.get(a) ?? 0) + 1); // Google Photos albums (an item can be in several)
     }
     return c;
   }, [folders, items]);
@@ -40,7 +41,7 @@ export function Folders({ folders, items, roots, children, onPick }: { folders: 
   return (
     <div className="stack">
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <p className="muted" style={{ margin: 0 }}>Your folders as they are. Click a folder to see its photos and videos.</p>
+        <p className="muted" style={{ margin: 0 }}>Your folders as they are. Google Photos albums are listed under Google Photos. Click a folder to see its photos and videos.</p>
         <div className="row"><button className="btn" onClick={expandAll}>Expand all</button><button className="btn" onClick={collapseAll}>Collapse all</button></div>
       </div>
       <div className="panel tree">{tops.map((r) => node(r, 0))}</div>

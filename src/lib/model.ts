@@ -50,6 +50,20 @@ export interface Item {
   local?: boolean;
   /** Local files: last-modified time, to skip re-reading unchanged files. */
   mtime?: number;
+  /** Set for items in Google Photos (read through the helper add-on). */
+  gp?: GpRef;
+}
+
+/** How Google Photos knows an item. `dedup` is the same for every copy of the same file content. */
+export interface GpRef {
+  key: string; // media key
+  dedup: string;
+  albums?: string[]; // folder ids of the albums it is in ('gp:a:' + album key)
+  archived?: boolean;
+  fav?: boolean;
+  place?: string;
+  uploaded?: string; // ISO date-time it was added to Google Photos
+  named?: boolean; // file name and size have been read
 }
 
 export interface Folder {
@@ -280,7 +294,7 @@ export function applyFilters(items: Item[], f: Filters, pathOf: (id?: string) =>
     if (f.maxSize != null && it.size > f.maxSize) return false;
     if (f.withPlace === 'yes' && it.lat == null) return false;
     if (f.withPlace === 'no' && it.lat != null) return false;
-    if (f.folderId && !inFolder(it.folderId, f.folderId)) return false;
+    if (f.folderId && !inFolder(it.folderId, f.folderId) && !it.gp?.albums?.includes(f.folderId)) return false;
     if (q && !(it.name.toLowerCase().includes(q) || pathOf(it.folderId).toLowerCase().includes(q) || (it.camera ?? '').toLowerCase().includes(q) || it.tags.some((t) => t.toLowerCase().includes(q)) || (extra?.(it) ?? '').toLowerCase().includes(q))) return false;
     return true;
   });
@@ -303,6 +317,12 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 
 export function monthLabel(ym: string): string {
   const [y, m] = ym.split('-');
   return `${MONTHS[Number(m) - 1] ?? ''} ${y}`;
+}
+
+/** A preview link at about `px` pixels, for Drive and Google Photos items. */
+export function thumbUrl(it: Pick<Item, 'thumb' | 'gp'> | undefined, px: number): string | undefined {
+  if (!it?.thumb) return undefined;
+  return it.gp ? `${it.thumb.replace(/=[a-z0-9-]+$/i, '')}=w${px}-h${px}-k-no` : sizedThumb(it.thumb, px);
 }
 
 /** Bigger thumbnail from a Drive thumbnailLink (ends with =s220). */

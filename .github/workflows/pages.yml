@@ -25,6 +25,8 @@ jobs:
         env:
           BASE_PATH: /${{ github.event.repository.name }}/
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
+      - name: Package the Google Photos helper add-on
+        run: cd extension && zip -qr ../dist/photo-organizer-helper.zip .
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

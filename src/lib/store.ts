@@ -9,6 +9,8 @@ export interface Meta {
   /** Where the photos come from: a folder on this computer, or Google Drive. */
   source?: 'local' | 'drive';
   localName?: string;
+  /** When Google Photos was last read (it sits next to the folder or Drive above). */
+  gpLastScan?: string;
 }
 
 let dbp: Promise<IDBPDatabase> | null = null;
