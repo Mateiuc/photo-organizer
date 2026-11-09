@@ -83,12 +83,11 @@ export async function scanFolder(
   const rootFolder: Folder = { id: 'local:' + top.name, name: top.name };
   const queue: { dir: Dir; folder: Folder; path: string }[] = [{ dir: top, folder: rootFolder, path: top.name }];
   let nFolders = 0, nFiles = 0;
-  while (queue.length && !signal.stop) {
-    const { dir, folder, path } = queue.shift()!;
+  // 1. List every folder first (quick), several at a time.
+  const tasks: { h: FileSystemFileHandle; path: string; folderId: string }[] = [];
+  const listOne = async ({ dir, folder, path }: (typeof queue)[number]) => {
     dirs.set(folder.id, dir);
-    onProgress({ folders: nFolders, files: nFiles, current: path });
     const subs: Folder[] = [];
-    const found: { h: FileSystemFileHandle; path: string }[] = [];
     for await (const [name, h] of (dir as any).entries() as AsyncIterable<[string, FileSystemHandle]>) {
       if (skip(name)) continue;
       if (h.kind === 'directory') {
@@ -96,26 +95,47 @@ export async function scanFolder(
         subs.push(f);
         queue.push({ dir: h as Dir, folder: f, path: path + '/' + name });
       } else if (mimeFromName(name)) {
-        found.push({ h: h as FileSystemFileHandle, path: path + '/' + name });
+        tasks.push({ h: h as FileSystemFileHandle, path: path + '/' + name, folderId: folder.id });
       }
     }
-    const items: Item[] = [];
-    for (let i = 0; i < found.length && !signal.stop; i += 8) {
-      const batch = await Promise.all(found.slice(i, i + 8).map(async ({ h, path: p }) => {
-        try {
-          const file = await h.getFile();
-          const it = await toLocalItem(file, p, folder.id, known);
-          if (it) files.set(it.id, h);
-          return it;
-        } catch { return null; }
-      }));
-      batch.forEach((x) => x && items.push(x));
-      nFiles += batch.filter(Boolean).length;
-      onProgress({ folders: nFolders, files: nFiles, current: path });
-    }
     nFolders++;
-    await onFolder(folder, items, subs);
-  }
+    onProgress({ folders: nFolders, files: tasks.length, current: path });
+    await onFolder(folder, [], subs);
+  };
+  let listing = 0;
+  await new Promise<void>((done, fail) => {
+    const pump = () => {
+      if (signal.stop) { if (!listing) done(); return; }
+      while (listing < 8 && queue.length) {
+        listing++;
+        listOne(queue.shift()!).then(() => { listing--; pump(); }, fail);
+      }
+      if (!listing && !queue.length) done();
+    };
+    pump();
+  });
+
+  // 2. Read the files, many at once: with cloud folders (Google Drive, OneDrive) each file
+  //    may have to come from the internet, so waiting on one at a time is what makes it slow.
+  let next = 0, ready: Item[] = [], last = Date.now();
+  const flush = async () => { if (ready.length) { const out = ready; ready = []; await onFolder(rootFolder, out, []); } };
+  const worker = async () => {
+    while (next < tasks.length && !signal.stop) {
+      const t = tasks[next++];
+      try {
+        const file = await t.h.getFile();
+        const it = await toLocalItem(file, t.path, t.folderId, known);
+        if (it) { files.set(it.id, t.h); ready.push(it); nFiles++; }
+      } catch { /* unreadable file: skip it */ }
+      if (Date.now() - last > 500) {
+        last = Date.now();
+        onProgress({ folders: nFolders, files: nFiles, current: t.path.slice(0, t.path.lastIndexOf('/')) + ` (${nFiles.toLocaleString()} of ${tasks.length.toLocaleString()})` });
+        if (ready.length >= 200) await flush();
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: 24 }, worker));
+  await flush();
   return rootFolder;
 }
 
