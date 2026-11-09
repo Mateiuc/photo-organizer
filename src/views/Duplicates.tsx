@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { exactDuplicates, fmtSize, hasCameraData, pickKeeper, possibleCopies, type Item } from '../lib/model';
+import { exactDuplicates, fmtDuration, fmtSize, hasCameraData, pickKeeper, possibleCopies, type Item } from '../lib/model';
 import { Preview } from './Grid';
 
 type Tab = 'exact' | 'maybe';
@@ -13,7 +13,7 @@ function Details({ x, pathOf }: { x: Item; pathOf: (id?: string) => string }) {
       <span className="muted">{pathOf(x.folderId)}</span>
       {!hasCameraData(x) && <span className="tag extra">No camera data</span>}
       <span>{x.takenAt ? x.takenAt.replace('T', ' ') : 'No date'} <span className="muted">· {src}</span></span>
-      <span>{fmtSize(x.size)}{x.width ? ` · ${x.width}×${x.height}` : ''}</span>
+      <span>{fmtSize(x.size)}{x.width ? ` · ${x.width}×${x.height}` : ''}{x.durationMs ? ` · ${fmtDuration(x.durationMs)}` : ''}</span>
       <span className="muted">{x.camera ?? 'No camera'} · {x.lat != null ? 'has place' : 'no place'}</span>
     </>
   );
@@ -64,7 +64,7 @@ export function Duplicates({ items, pathOf, onTrash, onOpen, readOnly, local }: 
           <div><b>{fmtSize(space)}</b><span>you'd free</span></div>
         </div>
         {tab === 'exact' ? (
-          <p className="muted">{local ? 'These files have identical content, checked with a fingerprint of each file.' : "These files are byte-for-byte identical, checked with Google Drive's own fingerprint of each file."} The app keeps the copy with the most camera data (date, place, camera), then the one not in WhatsApp, then the one in a folder named for the photo's month. Click any copy's button to change what is kept.</p>
+          <p className="muted">For videos, the preview picture can come from a different moment in each copy, so two identical videos may show different pictures. {local ? 'These files have identical content, checked with a fingerprint of each file.' : "These files are byte-for-byte identical, checked with Google Drive's own fingerprint of each file."} The app keeps the copy with the most camera data (date, place, camera), then the one not in WhatsApp, then the one in a folder named for the photo's month. Click any copy's button to change what is kept.</p>
         ) : (
           <p className="muted">These are probably the same photo, but the files are <b>not identical</b>. They have the same file name, or the same camera moment and picture size. Often one copy was re-saved, made smaller, or lost its camera data. Copies without camera data are marked to remove when another copy still has it. Everything else is up to you: open the photos and click to choose.</p>
         )}
