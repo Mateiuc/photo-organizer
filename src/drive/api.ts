@@ -25,7 +25,7 @@ export function clientId(): string {
     const saved = localStorage.getItem('po.clientId');
     if (saved) return saved;
   } catch {}
-  return (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) ?? DEFAULT_CLIENT_ID;
+  return (import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined) || DEFAULT_CLIENT_ID;
 }
 
 function loadGis(): Promise<void> {
