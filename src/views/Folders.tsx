@@ -12,7 +12,15 @@ export function Folders({ folders, items, roots, children, onPick }: { folders: 
     }
     return c;
   }, [folders, items]);
-  const [open, setOpen] = useState<Set<string>>(() => new Set(roots.map((r) => r.id)));
+  // A chosen folder that sits inside another chosen folder is shown under it, not again at the top.
+  const tops = useMemo(() => {
+    const by = new Map(folders.map((f) => [f.id, f]));
+    const ids = new Set(roots.map((r) => r.id));
+    return roots.filter((r) => { let cur = by.get(r.id)?.parentId, g = 0; while (cur && g++ < 40) { if (ids.has(cur)) return false; cur = by.get(cur)?.parentId; } return true; });
+  }, [roots, folders]);
+  const [open, setOpen] = useState<Set<string>>(() => new Set(tops.map((r) => r.id)));
+  const expandAll = () => setOpen(new Set(folders.filter((f) => counts.get(f.id)).map((f) => f.id)));
+  const collapseAll = () => setOpen(new Set());
   const node = (f: Folder, depth: number): JSX.Element | null => {
     const n = counts.get(f.id) ?? 0;
     if (!n) return null;
@@ -31,8 +39,11 @@ export function Folders({ folders, items, roots, children, onPick }: { folders: 
   };
   return (
     <div className="stack">
-      <p className="muted">Your Drive folders as they are. Click a folder to see its photos and videos.</p>
-      <div className="panel tree">{roots.map((r) => node(r, 0))}</div>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <p className="muted" style={{ margin: 0 }}>Your folders as they are. Click a folder to see its photos and videos.</p>
+        <div className="row"><button className="btn" onClick={expandAll}>Expand all</button><button className="btn" onClick={collapseAll}>Collapse all</button></div>
+      </div>
+      <div className="panel tree">{tops.map((r) => node(r, 0))}</div>
     </div>
   );
 }
