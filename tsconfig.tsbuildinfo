@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/drive/api.ts","./src/lib/demo.ts","./src/lib/model.test.ts","./src/lib/model.ts","./src/lib/store.ts","./src/views/Duplicates.tsx","./src/views/Folders.tsx","./src/views/Grid.tsx","./src/views/Places.tsx","./src/views/Setup.tsx","./src/views/Viewer.tsx"],"version":"5.6.3"}

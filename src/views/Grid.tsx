@@ -1,0 +1,57 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { fmtDuration, monthLabel, sizedThumb, type Item } from '../lib/model';
+
+export function Thumb({ item, onOpen, onBroken }: { item: Item; onOpen: () => void; onBroken?: (it: Item) => void }) {
+  const [bad, setBad] = useState(false);
+  const src = sizedThumb(item.thumb, 320);
+  return (
+    <button className="tile" onClick={onOpen} title={item.name} aria-label={`Open ${item.name}`}>
+      {src && !bad ? (
+        <img src={src} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" onError={() => { setBad(true); onBroken?.(item); }} />
+      ) : (
+        <span className="ph">{item.kind === 'raw' ? 'RAW · no preview' : item.name}</span>
+      )}
+      {item.kind === 'video' && <span className="badge">▶ {fmtDuration(item.durationMs)}</span>}
+      {item.kind === 'raw' && <span className="badge">RAW</span>}
+    </button>
+  );
+}
+
+/** Photos grouped by month, newest first, rendered in chunks as you scroll. */
+export function MonthGrid({ items, onOpen, onBroken }: { items: Item[]; onOpen: (list: Item[], i: number) => void; onBroken?: (it: Item) => void }) {
+  const sorted = useMemo(() => [...items].sort((a, b) => (b.takenAt ?? '').localeCompare(a.takenAt ?? '')), [items]);
+  const [limit, setLimit] = useState(400);
+  const sentinel = useRef<HTMLDivElement>(null);
+  useEffect(() => setLimit(400), [items]);
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el) return;
+    const io = new IntersectionObserver((es) => es[0].isIntersecting && setLimit((l) => l + 400), { rootMargin: '800px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [sorted.length]);
+  const groups = useMemo(() => {
+    const out: { key: string; items: Item[]; start: number }[] = [];
+    sorted.slice(0, limit).forEach((it, idx) => {
+      const k = it.takenAt?.slice(0, 7) ?? 'unknown';
+      const last = out[out.length - 1];
+      if (last && last.key === k) last.items.push(it);
+      else out.push({ key: k, items: [it], start: idx });
+    });
+    return out;
+  }, [sorted, limit]);
+  if (!items.length) return <p className="muted">No photos match. Try clearing the filters.</p>;
+  return (
+    <div>
+      {groups.map((g) => (
+        <section className="month" key={g.key + g.start}>
+          <h2>{g.key === 'unknown' ? 'No date' : monthLabel(g.key)} <span>{g.items.length.toLocaleString()}</span></h2>
+          <div className="grid">
+            {g.items.map((it, j) => <Thumb key={it.id} item={it} onOpen={() => onOpen(sorted, g.start + j)} onBroken={onBroken} />)}
+          </div>
+        </section>
+      ))}
+      {limit < sorted.length && <div className="more" ref={sentinel}>Loading more…</div>}
+    </div>
+  );
+}
