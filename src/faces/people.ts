@@ -2,10 +2,10 @@
 // Everything runs on this computer: no photo or face is sent anywhere.
 import { useEffect, useState } from 'react';
 import { openDB, type IDBPDatabase } from 'idb';
-import { downloadFile, NEEDS_SIGN_IN } from '../drive/api';
-import { sizedThumb, thumbUrl, type Item } from '../lib/model';
-import { ask, NO_HELPER, NOT_SIGNED_IN, RELOAD } from '../gphotos/bridge';
-import { getLocalFile } from '../local/fs';
+import { NEEDS_SIGN_IN } from '../drive/api';
+import type { Item } from '../lib/model';
+import { loadPicture, previews } from '../lib/picture';
+import { NO_HELPER, NOT_SIGNED_IN, RELOAD } from '../gphotos/bridge';
 import { assign, merge as mergePeople, without, type Face, type Person } from './cluster';
 
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -190,34 +190,11 @@ function faceApi(): Promise<FaceApi> {
 }
 
 const SIZE = 1024; // pictures are read at this width: enough for faces, quick to process
-let previewsBlocked = false; // Drive previews can't be read by the page; fall back to the full file
-
-async function picture(it: Item): Promise<ImageBitmap | undefined> {
-  let blob: Blob | undefined;
-  if (it.local) blob = await getLocalFile(it.id);
-  else if (DEMO) { if (it.thumb) blob = await (await fetch(it.thumb)).blob(); }
-  else if (it.gp) {
-    // Google Photos: the helper add-on fetches a 1024 px picture in the Google Photos tab.
-    const url = thumbUrl(it, SIZE);
-    if (url) blob = await (await fetch((await ask<{ dataUrl: string }>({ op: 'image', url }, 60000)).dataUrl)).blob();
-  }
-  else {
-    if (!previewsBlocked && it.thumb) {
-      try {
-        const r = await fetch(sizedThumb(it.thumb, SIZE)!, { referrerPolicy: 'no-referrer' });
-        if (r.ok) blob = await r.blob();
-      } catch { previewsBlocked = true; state.run.slow = true; }
-    }
-    if (!blob && it.kind !== 'raw') blob = await downloadFile(it.id);
-  }
-  if (!blob) return undefined;
-  try {
-    const probe = await createImageBitmap(blob);
-    if (probe.width <= SIZE) return probe;
-    probe.close();
-    return await createImageBitmap(blob, { resizeWidth: SIZE, resizeQuality: 'medium' });
-  } catch { return undefined; } // a format the browser can't open (HEIC, most RAW)
-}
+const picture = async (it: Item) => {
+  const bmp = await loadPicture(it, { size: SIZE, fit: 'width' });
+  if (previews.blocked) state.run.slow = true;
+  return bmp;
+};
 
 function cropOf(canvas: HTMLCanvasElement, b: { x: number; y: number; width: number; height: number }): string {
   const pad = 0.25, x = Math.max(0, b.x - b.width * pad), y = Math.max(0, b.y - b.height * pad);
@@ -237,7 +214,7 @@ export async function findFaces(items: Item[]) {
   await load();
   const todo = items.filter((it) => (it.kind === 'photo' || it.kind === 'raw') && !state.scanned.has(it.id));
   stopFlag = false;
-  state.run = { running: true, done: 0, total: todo.length, slow: previewsBlocked };
+  state.run = { running: true, done: 0, total: todo.length, slow: previews.blocked };
   notify();
   try {
     const api = await faceApi();

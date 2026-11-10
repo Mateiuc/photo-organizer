@@ -7,16 +7,18 @@
 //   people.json            people, names, which face belongs to whom, which photos were looked at
 //   people-YYYY-MM-DD.json the same, one per day for the last 10 days (in case a day's work needs undoing)
 //   faces-0001.json …      the faces themselves (fingerprint and small picture). Written once, never changed.
+//   pictures-0001.json …   what "Compare pictures" learned about each photo's picture. Written once, never changed.
 import { useEffect, useState } from 'react';
 import { openDB } from 'idb';
 import { changes, markBackedUp, ready, replaceAll, subscribe, type StoredFace } from '../faces/people';
 import type { Person } from '../faces/cluster';
 import { libraryEvents, type Library } from './store';
+import { markPicsBackedUp, picChanges, picturesReady, replaceAllPics, subscribePictures, type PicRec } from '../pictures/store';
 
 export const BACKUP_FOLDER = 'Photo Organizer backup';
 type Dir = FileSystemDirectoryHandle;
 
-export interface Manifest { app: 'Photo Organizer'; v: 1; savedAt: string; photos: number; faces: number; people: number; named: number }
+export interface Manifest { app: 'Photo Organizer'; v: 1; savedAt: string; photos: number; faces: number; people: number; named: number; pictures?: number }
 export interface BackupStatus {
   supported: boolean;
   folder?: string; // name of the backup folder's parent, as the user picked it
@@ -68,8 +70,10 @@ async function names(dir: Dir): Promise<string[]> {
   for await (const [n, h] of (dir as any).entries() as AsyncIterable<[string, FileSystemHandle]>) if (h.kind === 'file') out.push(n);
   return out;
 }
-const chunkName = (n: number) => `faces-${String(n).padStart(4, '0')}.json`;
-const chunkNo = (name: string) => { const m = name.match(/^faces-(\d+)\.json$/); return m ? +m[1] : undefined; };
+type Kind = 'faces' | 'pictures';
+const chunkName = (n: number, kind: Kind = 'faces') => `${kind}-${String(n).padStart(4, '0')}.json`;
+const chunkNo = (name: string, kind: Kind = 'faces') => { const m = name.match(/^(faces|pictures)-(\d+)\.json$/); return m && m[1] === kind ? +m[2] : undefined; };
+const chunks = (files: string[], kind: Kind) => files.map((n) => chunkNo(n, kind)).filter((n): n is number => n != null);
 async function hasBackup(dir: Dir): Promise<Manifest | undefined> {
   try { return await readJson<Manifest>(dir, 'backup.json'); } catch { return undefined; }
 }
@@ -82,6 +86,14 @@ async function backupDirIn(picked: Dir, create: boolean): Promise<Dir | undefine
 // Fingerprints are kept as base64 float32: a third of the size of plain numbers.
 const f32 = (a: ArrayLike<number>) => { const b = new Uint8Array(Float32Array.from(a).buffer); let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); };
 const unf32 = (s: string) => Array.from(new Float32Array(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)).buffer));
+const b64 = (a: ArrayBufferView) => { const b = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); };
+const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+interface PicRow { i: string; h?: string; g?: string; e?: string; s?: number; f?: number; a?: number; c?: number[]; m?: number; x?: 1; W?: number; H?: number }
+const picRow = (r: PicRec): PicRow => (r.x ? { i: r.id, x: 1, m: r.m } : { i: r.id, h: b64(r.h!), g: b64(r.g!), e: b64(r.e!), s: r.sh, f: r.fl, a: r.ar, c: r.c, m: r.m, W: r.pw, H: r.ph });
+const fromPicRow = (w: PicRow, b: number): PicRec => (w.x ? { id: w.i, x: 1, m: w.m, b } : {
+  id: w.i, h: new Uint32Array(unb64(w.h!).buffer), g: unb64(w.g!), e: new Int8Array(unb64(w.e!).buffer), sh: w.s, fl: w.f, ar: w.a, c: w.c, m: w.m, pw: w.W, ph: w.H, b,
+});
 
 interface FaceRow { k: string; i: string; d: string; x: StoredFace['box']; c: string }
 interface PersonRow { id: string; name?: string; n: number; cover: string; s: string }
@@ -92,9 +104,11 @@ let lib: Library | null = null;
 let dir: Dir | null = null;
 let libDirty = false;
 let seen = { edits: 0, faces: 0, resets: 0 };
+let seenPics = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let due = 0;
 let wasRunning = false;
+let wasComparing = false;
 
 /** Saves within `ms`, or sooner if a save is already planned sooner. */
 function soon(ms: number) {
@@ -117,12 +131,16 @@ export async function startBackup(library: Library, demo: boolean) {
     if (changes.edits !== seen.edits) soon(15_000); // names and joins: saved within seconds
     else if (changes.faces !== seen.faces || changes.resets !== seen.resets) soon(300_000); // while finding faces: every 5 minutes
   });
-  // Finding faces stopped or finished: save what it found.
+  subscribePictures(() => { if (picChanges.n !== seenPics) soon(300_000); }); // while comparing pictures: every 5 minutes
+  // Finding faces or comparing pictures stopped or finished: save what it found.
   setInterval(async () => {
     if (!dir) return;
     const st = await ready();
     if (wasRunning && !st.run.running && changes.faces !== seen.faces) soon(3_000);
     wasRunning = st.run.running;
+    const ps = await picturesReady();
+    if (wasComparing && !ps.run.running && picChanges.n !== seenPics) soon(3_000);
+    wasComparing = ps.run.running;
   }, 5000);
   const r = await remembered();
   if (!r) return;
@@ -137,9 +155,14 @@ export async function startBackup(library: Library, demo: boolean) {
 async function check() {
   if (!dir) return;
   const st = await ready();
-  const have = new Set((await names(dir)).map(chunkNo).filter((n): n is number => n != null));
+  const files = await names(dir);
+  const have = new Set(chunks(files, 'faces'));
   const lost = [...st.faces.values()].filter((f) => f.b != null && !have.has(f.b)).map((f) => f.key);
   if (lost.length) { await markBackedUp(lost, undefined); soon(2_000); }
+  const ps = await picturesReady();
+  const havePics = new Set(chunks(files, 'pictures'));
+  const lostPics = [...ps.recs.values()].filter((r) => r.b != null && !havePics.has(r.b)).map((r) => r.id);
+  if (lostPics.length) { await markPicsBackedUp(lostPics, undefined); soon(2_000); }
 }
 
 /** After a click: allow saving again to the remembered folder (browsers ask once per visit unless told to always allow). */
@@ -156,18 +179,29 @@ export async function save(force = false): Promise<void> {
   if (!(await permitted(dir, false))) { status.needsPermission = true; tell(); return; }
   status.saving = true; status.error = undefined; tell();
   const before = { ...changes };
+  const picsBefore = picChanges.n;
   const libWasDirty = libDirty; libDirty = false;
   try {
     const st = await ready();
     const files = await names(dir);
     // 1. Faces not in the backup yet go into new files (existing files never change).
-    let next = Math.max(0, ...files.map(chunkNo).filter((n): n is number => n != null)) + 1;
+    let next = Math.max(0, ...chunks(files, 'faces')) + 1;
     const fresh = [...st.faces.values()].filter((f) => f.b == null);
     for (let i = 0; i < fresh.length; i += 2000) {
       const part = fresh.slice(i, i + 2000);
       await writeJson(dir, chunkName(next), part.map((f): FaceRow => ({ k: f.key, i: f.itemId, d: f32(f.d), x: f.box, c: f.crop })));
       await markBackedUp(part.map((f) => f.key), next);
       next++;
+    }
+    // 1b. Pictures compared since the last save, the same way.
+    const ps = await picturesReady();
+    let nextPic = Math.max(0, ...chunks(files, 'pictures')) + 1;
+    const freshPics = [...ps.recs.values()].filter((r) => r.b == null);
+    for (let i = 0; i < freshPics.length; i += 2000) {
+      const part = freshPics.slice(i, i + 2000);
+      await writeJson(dir, chunkName(nextPic, 'pictures'), part.map(picRow));
+      await markPicsBackedUp(part.map((r) => r.id), nextPic);
+      nextPic++;
     }
     // 2. People and names. Photos whose faces aren't all saved yet are left out, so they're looked at again after a restore.
     const unsaved = new Set([...st.faces.values()].filter((f) => f.b == null).map((f) => f.itemId));
@@ -190,14 +224,17 @@ export async function save(force = false): Promise<void> {
       const d = await lib.load();
       if (d.items.length || !prev?.photos) { await writeJson(dir, 'library.json', d); photos = d.items.length; }
     }
-    const m: Manifest = { app: 'Photo Organizer', v: 1, savedAt: new Date().toISOString(), photos, faces: st.faces.size, people: st.people.size, named: [...st.people.values()].filter((p) => p.name).length };
+    const m: Manifest = { app: 'Photo Organizer', v: 1, savedAt: new Date().toISOString(), photos, faces: st.faces.size, people: st.people.size, named: [...st.people.values()].filter((p) => p.name).length, pictures: ps.recs.size };
     await writeJson(dir, 'backup.json', m);
     // Face files no face points to any more (after "Start over", or replaced by newer files) are removed last.
     const used = new Set([...st.faces.values()].map((f) => f.b));
     for (const n of files) { const c = chunkNo(n); if (c != null && !used.has(c)) await dir.removeEntry(n).catch(() => {}); }
+    const usedPics = new Set([...ps.recs.values()].map((r) => r.b));
+    for (const n of files) { const c = chunkNo(n, 'pictures'); if (c != null && !usedPics.has(c)) await dir.removeEntry(n).catch(() => {}); }
     seen = before;
+    seenPics = picsBefore;
     status.saved = m; status.savedAt = m.savedAt;
-    status.unsaved = changes.edits !== seen.edits || changes.faces !== seen.faces || libDirty;
+    status.unsaved = changes.edits !== seen.edits || changes.faces !== seen.faces || picChanges.n !== seenPics || libDirty;
   } catch (e) {
     libDirty ||= libWasDirty;
     status.error = `The backup couldn't be saved: ${(e as Error).message}`;
@@ -225,8 +262,9 @@ export async function chooseFolder(): Promise<{ existing?: Manifest; canContinue
   const st = await ready();
   const named = [...st.people.values()].filter((p) => p.name).length;
   const photos = (await lib?.load())?.items.length ?? 0;
+  const ps = await picturesReady();
   // Saving over an existing backup is only offered when nothing in it can be lost.
-  const canContinue = !existing || (st.faces.size >= existing.faces && st.people.size >= existing.people && named >= existing.named && photos >= existing.photos);
+  const canContinue = !existing || (st.faces.size >= existing.faces && st.people.size >= existing.people && named >= existing.named && photos >= existing.photos && ps.recs.size >= (existing.pictures ?? 0));
   const use = async () => {
     if (!canContinue) return;
     dir = target; status.folder = parent; status.needsPermission = false;
@@ -234,6 +272,7 @@ export async function chooseFolder(): Promise<{ existing?: Manifest; canContinue
     await remember(target, parent);
     // Everything is written to this folder afresh; old face files are removed once the new ones are saved.
     await markBackedUp([...st.faces.keys()], undefined);
+    await markPicsBackedUp([...ps.recs.keys()], undefined);
     await save(true);
   };
   return { existing, canContinue, use, restore: () => restoreFrom(target, parent) };
@@ -255,12 +294,17 @@ async function restoreFrom(target: Dir, parent: string) {
   const pf = await readJson<PeopleFile>(target, 'people.json').catch(() => undefined);
   const faces: StoredFace[] = [];
   if (pf) {
-    for (const n of all.map(chunkNo).filter((x): x is number => x != null).sort((a, b) => a - b)) {
+    for (const n of chunks(all, 'faces').sort((a, b) => a - b)) {
       const rows = await readJson<FaceRow[]>(target, chunkName(n));
       for (const r of rows) { const person = pf.who[r.k]; if (person) faces.push({ key: r.k, itemId: r.i, d: unf32(r.d), box: r.x, crop: r.c, person, b: n }); }
     }
   }
+  const pics: PicRec[] = [];
+  for (const n of chunks(all, 'pictures').sort((a, b) => a - b)) {
+    for (const w of await readJson<PicRow[]>(target, chunkName(n, 'pictures'))) pics.push(fromPicRow(w, n));
+  }
   if (library) await lib.replaceAll(library);
+  if (pics.length) await replaceAllPics(pics);
   if (pf) {
     const people: Person[] = pf.people.map((p) => ({ id: p.id, name: p.name, n: p.n, cover: p.cover, sum: unf32(p.s) }));
     await replaceAll(people, faces, pf.scanned);
@@ -268,6 +312,7 @@ async function restoreFrom(target: Dir, parent: string) {
   dir = target; status.folder = parent; status.needsPermission = false;
   await remember(target, parent);
   seen = { ...changes };
+  seenPics = picChanges.n;
   status.saved = await hasBackup(target); status.savedAt = status.saved?.savedAt; status.unsaved = false;
   tell();
 }

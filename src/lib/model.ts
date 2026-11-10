@@ -248,27 +248,23 @@ export function worseReason(x: Item, keep: Item, pathOf: (folderId?: string) => 
   return '';
 }
 
-/**
- * Probably the same photo, but NOT identical files: same file name, or same camera moment with the same camera
- * and picture size. Catches copies that were re-saved, resized or lost their camera data. Exact copies are left out.
- */
-export function possibleCopies(items: Item[]): Item[][] {
-  const parent = new Map<string, string>();
-  const find = (x: string): string => { let r = x; while (parent.get(r) !== r) r = parent.get(r)!; parent.set(x, r); return r; };
-  const join = (a: string, b: string) => parent.set(find(a), find(b));
-  const byKey = new Map<string, string>();
-  const link = (key: string, id: string) => { const o = byKey.get(key); if (o) join(id, o); else byKey.set(key, id); };
-  for (const it of items) {
-    if (it.kind === 'screenshot') continue;
-    parent.set(it.id, it.id);
-    const stem = it.name.toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/\s*\(\d+\)$/, '').replace(/[-_ ]copy$/, '');
-    if (!/^(img|dsc|dscn|dsc_|image|photo|video|vid|mov|p)?[_-]?\d{1,5}$/.test(stem)) link('n:' + it.kind + ':' + stem, it.id); // skip generic camera counters
-    if (it.takenFrom === 'camera' && it.takenAt && it.camera && it.width) link(`t:${it.takenAt}:${it.camera}:${Math.max(it.width, it.height ?? 0)}`, it.id);
-  }
-  const groups = new Map<string, Item[]>();
-  for (const it of items) { if (!parent.has(it.id)) continue; const r = find(it.id); const g = groups.get(r); g ? g.push(it) : groups.set(r, [it]); }
-  return [...groups.values()].filter((g) => g.length > 1 && new Set(g.map((x) => x.md5 ? x.md5 + ':' + x.size : x.id)).size > 1)
-    .sort((a, b) => b.length - a.length || (b[0].takenAt ?? '').localeCompare(a[0].takenAt ?? ''));
+const itemPixels = (x: Item) => (x.width && x.height ? x.width * x.height : 0);
+/** Which copy of the same photo to keep: the one with the most camera information, then the biggest picture, then as for identical files. */
+export function pickSame(group: Item[], pathOf: (folderId?: string) => string, pixels = itemPixels): Item {
+  const top = Math.max(...group.map(metaScore));
+  const best = group.filter((x) => metaScore(x) === top);
+  const size = (x: Item) => (pixels(x) ? Math.floor(Math.log(pixels(x)) / Math.log(1.25)) : 0); // steps of 25%
+  const big = Math.max(...best.map(size));
+  return pickKeeper(best.filter((x) => size(x) === big), pathOf);
+}
+
+/** Why a copy of the same photo is worse than the one kept, from its picture: fewer pixels, or re-saved at lower quality. */
+export function lesserCopy(x: Item, keep: Item, pixels = itemPixels): string {
+  const a = pixels(x), b = pixels(keep);
+  if (a && b && a < 0.7 * b) return 'smaller copy';
+  // Same kind of file and as many pixels, but much smaller: saved again at a lower quality (chat apps do this).
+  if (x.mime === keep.mime && (!a || !b || a >= 0.9 * b) && x.size && x.size < 0.6 * keep.size) return 'lower-quality copy';
+  return '';
 }
 
 export interface Filters {

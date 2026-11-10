@@ -6,7 +6,7 @@ export function when(iso?: string): string {
   const d = new Date(iso);
   return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
-const what = (m: Manifest) => `${m.photos.toLocaleString()} photos, ${m.faces.toLocaleString()} faces, ${m.people.toLocaleString()} people (${m.named.toLocaleString()} named)`;
+const what = (m: Manifest) => `${m.photos.toLocaleString()} photos, ${m.faces.toLocaleString()} faces, ${m.people.toLocaleString()} people (${m.named.toLocaleString()} named)${m.pictures ? `, ${m.pictures.toLocaleString()} pictures compared` : ''}`;
 
 /** Where the safe copy goes, and restoring it. */
 export function BackupPanel({ demo }: { demo: boolean }) {
@@ -38,7 +38,7 @@ export function BackupPanel({ demo }: { demo: boolean }) {
   return (
     <section className="panel" id="backup">
       <h2>Backup</h2>
-      <p className="muted">The app keeps your library, faces and names in this browser. A backup folder keeps a copy outside the browser, so nothing is lost if Chrome's data is cleared, and you can restore it on another computer. It saves by itself a few seconds after you name or join people, and every few minutes otherwise. Tip: choose a folder on your Google Drive (G:) and the backup goes to Google Drive too.</p>
+      <p className="muted">The app keeps your library, faces, names and compared pictures in this browser. A backup folder keeps a copy outside the browser, so nothing is lost if Chrome's data is cleared, and you can restore it on another computer. It saves by itself a few seconds after you name or join people, and every few minutes otherwise. Tip: choose a folder on your Google Drive (G:) and the backup goes to Google Drive too.</p>
       {b.folder ? (
         <p style={{ margin: 0 }}>
           Saving to <b>{BACKUP_FOLDER}</b> in <b>{b.folder}</b>. {b.saving ? 'Saving now…' : b.savedAt ? <>Last saved {when(b.savedAt)}{b.unsaved ? ', newer changes are saved soon' : ''}.</> : 'Not saved yet.'}

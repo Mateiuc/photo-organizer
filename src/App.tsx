@@ -16,6 +16,7 @@ import { Setup } from './views/Setup';
 import { Viewer } from './views/Viewer';
 import { allowAgain, startBackup, useBackup } from './lib/backup';
 import { when } from './views/Backup';
+import { useSimilar } from './pictures/groups';
 
 type View = 'photos' | 'places' | 'people' | 'folders' | 'duplicates' | 'setup';
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -70,7 +71,10 @@ export default function App() {
     const names = filters.q ? namesByItem() : undefined; // people's names are searchable too
     return applyFilters(items, filters, fx.pathOf, fx.inFolder, names && ((it) => names.get(it.id)?.join(' ')));
   }, [items, filters, fx]);
-  const dupCount = useMemo(() => exactDuplicates(items).reduce((s, g) => s + g.length - 1, 0), [items]);
+  const exactAll = useMemo(() => exactDuplicates(items), [items]);
+  const similar = useSimilar(items, exactAll);
+  // Extra copies: identical files, plus other copies of the same photo found by comparing the pictures.
+  const dupCount = useMemo(() => [...exactAll, ...similar.same].reduce((s, g) => s + g.length - 1, 0), [exactAll, similar.same]);
   const placeCount = useMemo(() => items.filter((i) => i.lat != null).length, [items]);
 
   type Walk = (onFolder: (folder: Folder, media: Item[], subs: Folder[]) => Promise<void>) => Promise<Folder[] | void>;
@@ -293,7 +297,7 @@ export default function App() {
             {view === 'places' && <Places items={shown} onOpen={open} />}
             {view === 'people' && <People items={shown} onOpen={open} readOnly={!DEMO && !gpCount && (isLocal ? needsReopen : !signedIn)} />}
             {view === 'folders' && <Folders folders={folders} items={items} roots={folderRoots} children={fx.children} onPick={(f) => { setFilters({ ...emptyFilters, folderId: f.id }); setShowFilters(true); setView('photos'); }} />}
-            {view === 'duplicates' && <Duplicates items={shown} pathOf={fx.pathOf} onTrash={trash} onOpen={open} readOnly={!DEMO && (isLocal ? !canWrite || needsReopen : !signedIn)} local={isLocal} />}
+            {view === 'duplicates' && <Duplicates items={shown} all={items} similar={similar} pathOf={fx.pathOf} onTrash={trash} onOpen={open} readOnly={!DEMO && (isLocal ? !canWrite || needsReopen : !signedIn)} local={isLocal} />}
             {view === 'setup' && <Setup demo={DEMO} source={meta.source} localName={meta.localName} onChooseFolder={chooseFolder} onChooseFiles={chooseFiles} roots={meta.source === 'drive' ? meta.roots : []} signedIn={signedIn} setSignedIn={setSignedIn} onScan={scan} scanning={scanning} progress={progress} onStop={() => { stopRef.current.stop = true; }} lastScan={meta.lastScan} onClear={async () => { await lib.clear(); setItems([]); setFolders([]); setMeta({ roots: [] }); }} gpCount={gpCount} gpLastScan={meta.gpLastScan} onScanGp={scanGp} />}
           </main>
         </div>

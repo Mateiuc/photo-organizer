@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { copyMark, misplaced, worseReason, possibleCopies, localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
+import { copyMark, misplaced, worseReason, pickSame, lesserCopy, localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
 
 describe('dates', () => {
   it('reads camera time', () => expect(exifToIso('2017:07:01 17:25:23')).toBe('2017-07-01T17:25:23'));
@@ -82,15 +82,18 @@ describe('copies that lost camera data', () => {
     const bare = base({ id: 'bare', folderId: 't', takenFrom: 'filename', takenAt: '2018-11-01T14:52:36' });
     expect(pickKeeper([bare, full], p).id).toBe('full');
   });
-  it('groups re-saved copies by name, not generic counters', () => {
-    const a = base({ id: 'a', name: '2018_11_01-14.52.36.jpg', md5: '1', size: 3e6 });
-    const b = base({ id: 'b', name: '2018_11_01-14.52.36.jpg', md5: '2', size: 2e5 });
-    const c = base({ id: 'c', name: 'IMG_0001.jpg', md5: '3' }), d = base({ id: 'd', name: 'IMG_0001.jpg', md5: '4' });
-    const g = possibleCopies([a, b, c, d]);
-    expect(g.map((x) => x.map((i) => i.id).sort())).toEqual([['a', 'b']]);
-  });
-  it('leaves exact copies to the exact list', () => {
-    expect(possibleCopies([base({ id: 'a', name: 'x1.jpg', md5: '1' }), base({ id: 'b', name: 'x1.jpg', md5: '1' })])).toEqual([]);
+  it('keeps the biggest picture of the same photo, unless it lost its camera data', () => {
+    const big = base({ id: 'big', folderId: 'b', takenFrom: 'camera', camera: 'Sony', width: 4000, height: 3000 });
+    const small = base({ id: 'small', folderId: 'b', takenFrom: 'camera', camera: 'Sony', width: 1600, height: 1200, name: 'IMG_1.jpg' });
+    const bare = base({ id: 'bare', folderId: 'b', takenFrom: 'upload', width: 8000, height: 6000 });
+    expect(pickSame([small, big, bare], p).id).toBe('big');
+    expect(lesserCopy(small, big)).toBe('smaller copy');
+    expect(lesserCopy(big, big)).toBe('');
+    expect(lesserCopy(base({ id: 'x', size: 1e6 }), { ...big, size: 1.2e6 })).toBe(''); // size unknown, file not much smaller: no claim
+    const resaved = { ...big, id: 'r', size: 4e5 }, orig = { ...big, size: 3e6 };
+    expect(lesserCopy(resaved, orig)).toBe('lower-quality copy');
+    expect(lesserCopy({ ...resaved, mime: 'image/heic' }, orig)).toBe(''); // HEIC files are smaller by nature
+    expect(pickSame([big, small], p, (x) => (x.id === 'small' ? 1e8 : 1e6)).id).toBe('small'); // sizes learned from the pictures
   });
 });
 
