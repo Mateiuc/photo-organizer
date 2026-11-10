@@ -13,6 +13,9 @@ export interface Meta {
   gpLastScan?: string;
 }
 
+/** Called after every change to the library, so the backup knows to save it. */
+export const libraryEvents = { changed: () => {} };
+
 let dbp: Promise<IDBPDatabase> | null = null;
 function db(name: string) {
   return (dbp ??= openDB(name, 1, {
@@ -32,21 +35,34 @@ export class Library {
     const [items, folders, meta] = await Promise.all([d.getAll('items'), d.getAll('folders'), d.get('meta', 'meta')]);
     return { items, folders, meta: meta ?? { roots: [] } };
   }
-  async putFolder(f: Folder) { await (await db(this.name)).put('folders', f); }
+  async putFolder(f: Folder) { await (await db(this.name)).put('folders', f); libraryEvents.changed(); }
   async putItems(items: Item[]) {
     const d = await db(this.name);
     const tx = d.transaction('items', 'readwrite');
     await Promise.all([...items.map((i) => tx.store.put(i)), tx.done]);
+    libraryEvents.changed();
   }
   async removeItems(ids: string[]) {
     const d = await db(this.name);
     const tx = d.transaction('items', 'readwrite');
     await Promise.all([...ids.map((i) => tx.store.delete(i)), tx.done]);
+    libraryEvents.changed();
   }
-  async setMeta(m: Meta) { await (await db(this.name)).put('meta', m, 'meta'); }
+  async setMeta(m: Meta) { await (await db(this.name)).put('meta', m, 'meta'); libraryEvents.changed(); }
   async clear() {
     const d = await db(this.name);
     await Promise.all([d.clear('items'), d.clear('folders'), d.delete('meta', 'meta')]);
+    libraryEvents.changed();
+  }
+  /** Replaces the whole library with a backup's contents. */
+  async replaceAll(data: { items: Item[]; folders: Folder[]; meta: Meta }) {
+    const d = await db(this.name);
+    const tx = d.transaction(['items', 'folders', 'meta'], 'readwrite');
+    await Promise.all([tx.objectStore('items').clear(), tx.objectStore('folders').clear()]);
+    for (const i of data.items) tx.objectStore('items').put(i);
+    for (const f of data.folders) tx.objectStore('folders').put(f);
+    tx.objectStore('meta').put(data.meta ?? { roots: [] }, 'meta');
+    await tx.done;
   }
 }
 

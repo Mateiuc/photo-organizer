@@ -4,6 +4,7 @@ import { canWrite, TRASH } from '../local/fs';
 import type { Folder } from '../lib/model';
 import { connect } from '../gphotos/api';
 import { helperVersion } from '../gphotos/bridge';
+import { BackupPanel } from './Backup';
 
 const EDGE = typeof navigator !== 'undefined' && /\bEdg\//.test(navigator.userAgent);
 const CHROMIUM = typeof navigator !== 'undefined' && /(Chrome|Chromium|Edg)\//.test(navigator.userAgent) && !/Mobile|Android/.test(navigator.userAgent);
@@ -187,9 +188,11 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
         )}
       </section>
 
+      <BackupPanel demo={demo} />
+
       <section className="panel">
         <h2>Library on this device</h2>
-        <p className="muted">The app keeps what it learned in this browser so it opens fast. Clearing it changes none of your photos; just choose the folder again.</p>
+        <p className="muted">The app keeps what it learned in this browser so it opens fast. Clearing it changes none of your photos and doesn't touch the backup; just choose the folder again.</p>
         <div className="row"><button className="btn" onClick={onClear}>Clear library on this device</button></div>
       </section>
     </div>

@@ -14,6 +14,8 @@ import { namesByItem } from './faces/people';
 import { albumFolderId, GP_ROOT, scanAlbums, scanLibrary } from './gphotos/api';
 import { Setup } from './views/Setup';
 import { Viewer } from './views/Viewer';
+import { allowAgain, startBackup, useBackup } from './lib/backup';
+import { when } from './views/Backup';
 
 type View = 'photos' | 'places' | 'people' | 'folders' | 'duplicates' | 'setup';
 const DEMO = new URLSearchParams(location.search).has('demo');
@@ -59,6 +61,7 @@ export default function App() {
         if (!d.items.length) setView('setup');
       }
       setLoaded(true);
+      startBackup(lib, DEMO).catch(() => {});
     })().catch((e) => { setError(String(e?.message ?? e)); setLoaded(true); });
   }, []);
 
@@ -234,6 +237,7 @@ export default function App() {
   const kindsOn = (k: Kind) => filters.kinds.includes(k);
   const active = filters.kinds.length || filters.q || filters.from || filters.to || filters.minSize != null || filters.withPlace !== 'any' || filters.folderId;
 
+  const bk = useBackup();
   if (!loaded) return <div className="more">Opening your library…</div>;
   return (
     <div className="shell">
@@ -246,6 +250,11 @@ export default function App() {
         {nav('duplicates', 'Duplicates', dupCount)}
         <div className="grow" />
         {nav('setup', 'Choose photos')}
+        {!DEMO && bk.supported && (
+          <button className={`who bk ${!bk.folder || bk.needsPermission || bk.error ? 'warn' : ''}`} onClick={() => setView('setup')} title="Backup of your library, faces and names">
+            {!bk.folder ? '⚠ Backup is off' : bk.needsPermission ? '⚠ Backup paused' : bk.error ? '⚠ Backup failed' : bk.saving ? 'Backup: saving…' : bk.savedAt ? `Backup ✓ ${when(bk.savedAt)}` : 'Backup: not saved yet'}
+          </button>
+        )}
         <div className="who">{DEMO ? 'Sample photos' : [isLocal ? `Folder: ${meta.localName ?? ''}` : meta.source === 'drive' ? (signedIn ? 'Connected to Drive' : 'Drive (not connected)') : '', gpCount ? 'Google Photos' : ''].filter(Boolean).join(' · ') || 'Not connected'}</div>
       </nav>
       <div className="main">
@@ -278,6 +287,7 @@ export default function App() {
             {error && (error === NEEDS_SIGN_IN
               ? <div className="notice row" style={{ marginBottom: 12 }}><span>{error}</span><button className="btn primary" onClick={() => signIn().then(() => { setSignedIn(true); setError(''); }, (e) => setError((e as Error).message))}>Sign in again</button></div>
               : <p className="notice">{error}</p>)}
+            {bk.needsPermission && <div className="notice row" style={{ marginBottom: 12 }}><span>Backup paused: Chrome needs your OK to keep saving to “Photo Organizer backup”.</span><button className="btn primary" onClick={() => allowAgain()}>Allow saving</button></div>}
             {needsReopen && view !== 'setup' && <div className="notice row" style={{ marginBottom: 12 }}><span>To show the pictures, the browser needs your OK to open “{meta.localName}” again.</span><button className="btn primary" onClick={reopen}>Open folder</button></div>}
             {view === 'photos' && (items.length ? <MonthGrid items={shown} onOpen={open} onBroken={onBroken} /> : <div className="panel"><h2>No photos yet</h2><p className="muted">Choose a folder with photos to get started.</p><div className="row"><button className="btn primary" onClick={() => setView('setup')}>Choose folder</button></div></div>)}
             {view === 'places' && <Places items={shown} onOpen={open} />}

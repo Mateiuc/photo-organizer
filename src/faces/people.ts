@@ -22,16 +22,24 @@ const db = () => (dbp ??= openDB(DEMO ? 'photo-organizer-faces-demo' : 'photo-or
 export interface PeopleState {
   loaded: boolean;
   people: Map<string, Person>;
-  faces: Map<string, Face & { person: string }>;
+  faces: Map<string, StoredFace>;
   scanned: Set<string>;
   run: { running: boolean; done: number; total: number; current?: string; error?: string; slow?: boolean };
   /** Goes up on every change, so views know to recompute. */
   v: number;
 }
+/** A face as kept in this browser: who it belongs to, and which backup file holds it (if any yet). */
+export type StoredFace = Face & { person: string; b?: number };
 const state: PeopleState = { loaded: false, people: new Map(), faces: new Map(), scanned: new Set(), run: { running: false, done: 0, total: 0 }, v: 0 };
 const listeners = new Set<() => void>();
 let version = 0;
 const notify = () => { state.v = ++version; listeners.forEach((f) => f()); };
+
+/** Counters the backup watches: hand-made edits (names, joins), faces found, and "start over". */
+export const changes = { edits: 0, faces: 0, resets: 0 };
+export function subscribe(f: () => void): () => void { listeners.add(f); return () => { listeners.delete(f); }; }
+/** The people state, once it's loaded from this browser. */
+export async function ready(): Promise<PeopleState> { await load(); return state; }
 
 async function load() {
   if (state.loaded) return;
@@ -79,8 +87,9 @@ export async function rename(id: string, name: string): Promise<Undo> {
   const np = { ...p, name: name.trim() || undefined };
   state.people.set(id, np);
   await (await db()).put('people', np);
+  changes.edits++;
   notify();
-  return async () => { if (state.people.has(id)) { state.people.set(id, p); await (await db()).put('people', p); notify(); } };
+  return async () => { if (state.people.has(id)) { state.people.set(id, p); await (await db()).put('people', p); changes.edits++; notify(); } };
 }
 
 /** Joins person `fromId` into `intoId` (they're the same person). */
@@ -106,7 +115,30 @@ async function save(put: Person[], del: string[], faceKeys: string[], faceOwner:
   for (const p of put) { state.people.set(p.id, p); tx.objectStore('people').put(p); }
   for (const id of del) { state.people.delete(id); tx.objectStore('people').delete(id); }
   await tx.done;
+  changes.edits++;
   notify();
+}
+
+/** Remembers that these faces are now in backup file number `n` (or in none, with undefined). */
+export async function markBackedUp(keys: Iterable<string>, n: number | undefined) {
+  const d = await db();
+  const tx = d.transaction('faces', 'readwrite');
+  for (const k of keys) { const f = state.faces.get(k); if (f && f.b !== n) { const nf = { ...f, b: n }; state.faces.set(k, nf); tx.store.put(nf); } }
+  await tx.done;
+}
+
+/** Replaces everything about faces and people with a backup's contents. */
+export async function replaceAll(people: Person[], faces: StoredFace[], scanned: string[]) {
+  const d = await db();
+  const tx = d.transaction(['people', 'faces', 'scanned'], 'readwrite');
+  await Promise.all([tx.objectStore('people').clear(), tx.objectStore('faces').clear(), tx.objectStore('scanned').clear()]);
+  const perItem = new Map<string, number>();
+  for (const f of faces) { tx.objectStore('faces').put(f); perItem.set(f.itemId, (perItem.get(f.itemId) ?? 0) + 1); }
+  for (const p of people) tx.objectStore('people').put(p);
+  for (const id of scanned) tx.objectStore('scanned').put(perItem.get(id) ?? 0, id);
+  await tx.done;
+  state.loaded = false; state.people.clear(); state.faces.clear(); state.scanned.clear();
+  await load();
 }
 
 /** Names a person. If someone already has that name, the two are joined instead. */
@@ -129,6 +161,7 @@ export async function splitFace(key: string) {
   const tx = d.transaction(['people', 'faces'], 'readwrite');
   tx.objectStore('people').put(np); tx.objectStore('people').put(alone); tx.objectStore('faces').put(nf);
   await tx.done;
+  changes.edits++;
   notify();
 }
 
@@ -137,6 +170,7 @@ export async function forgetAll() {
   const d = await db();
   await Promise.all([d.clear('people'), d.clear('faces'), d.clear('scanned')]);
   state.people.clear(); state.faces.clear(); state.scanned.clear();
+  changes.resets++;
   notify();
 }
 
@@ -245,6 +279,7 @@ export async function findFaces(items: Item[]) {
       await tx.done;
       state.scanned.add(it.id);
       state.run.done++;
+      changes.faces++;
       if (Date.now() - last > 700) { last = Date.now(); notify(); }
     }
   } catch (e) {
