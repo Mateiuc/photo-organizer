@@ -17,8 +17,10 @@ import { Viewer } from './views/Viewer';
 import { allowAgain, startBackup, useBackup } from './lib/backup';
 import { when } from './views/Backup';
 import { useSimilar } from './pictures/groups';
+import { Search } from './views/Search';
+import { topicsByItem, useTopics } from './search/topics';
 
-type View = 'photos' | 'places' | 'people' | 'folders' | 'duplicates' | 'setup';
+type View = 'photos' | 'search' | 'places' | 'people' | 'folders' | 'duplicates' | 'setup';
 const DEMO = new URLSearchParams(location.search).has('demo');
 const lib = new Library(DEMO ? 'photo-organizer-demo' : 'photo-organizer');
 const KINDS: { k: Kind; label: string }[] = [
@@ -67,10 +69,13 @@ export default function App() {
   }, []);
 
   const fx = useMemo(() => folderIndex(folders), [folders]);
+  const topics = useTopics();
   const shown = useMemo(() => {
-    const names = filters.q ? namesByItem() : undefined; // people's names are searchable too
-    return applyFilters(items, filters, fx.pathOf, fx.inFolder, names && ((it) => names.get(it.id)?.join(' ')));
-  }, [items, filters, fx]);
+    // People's names and search topics (like "VIN") are searchable too.
+    const names = filters.q ? namesByItem() : undefined;
+    const found = filters.q ? topicsByItem() : undefined;
+    return applyFilters(items, filters, fx.pathOf, fx.inFolder, names && ((it) => [...(names.get(it.id) ?? []), ...(found!.get(it.id) ?? [])].join(' ')));
+  }, [items, filters, fx, topics.v]); // eslint-disable-line react-hooks/exhaustive-deps
   const exactAll = useMemo(() => exactDuplicates(items), [items]);
   const similar = useSimilar(items, exactAll);
   // Extra copies: identical files, plus other copies of the same photo found by comparing the pictures.
@@ -248,6 +253,7 @@ export default function App() {
       <nav className="rail" aria-label="Views">
         <div className="brand"><img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" />Photo Organizer</div>
         {nav('photos', 'Photos', items.length)}
+        {nav('search', 'Search')}
         {nav('places', 'Places', placeCount)}
         {nav('people', 'People')}
         {nav('folders', 'Folders')}
@@ -263,10 +269,10 @@ export default function App() {
       </nav>
       <div className="main">
         <header className="top">
-          <h1>{{ photos: 'Photos', places: 'Places', people: 'People', folders: 'Folders', duplicates: 'Duplicates', setup: 'Choose photos' }[view]}</h1>
+          <h1>{{ photos: 'Photos', search: 'Search', places: 'Places', people: 'People', folders: 'Folders', duplicates: 'Duplicates', setup: 'Choose photos' }[view]}</h1>
           {view !== 'setup' && view !== 'folders' && (
             <>
-              <input className="search" type="search" id="q" placeholder="Search names, people, folders, camera…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
+              <input className="search" type="search" id="q" placeholder="Search names, people, topics, folders, camera…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
               {KINDS.map(({ k, label }) => (
                 <button key={k} className={`chip ${kindsOn(k) ? 'on' : ''}`} onClick={() => setFilters({ ...filters, kinds: kindsOn(k) ? filters.kinds.filter((x) => x !== k) : [...filters.kinds, k] })}>{label}</button>
               ))}
@@ -294,6 +300,7 @@ export default function App() {
             {bk.needsPermission && <div className="notice row" style={{ marginBottom: 12 }}><span>Backup paused: Chrome needs your OK to keep saving to “Photo Organizer backup”.</span><button className="btn primary" onClick={() => allowAgain()}>Allow saving</button></div>}
             {needsReopen && view !== 'setup' && <div className="notice row" style={{ marginBottom: 12 }}><span>To show the pictures, the browser needs your OK to open “{meta.localName}” again.</span><button className="btn primary" onClick={reopen}>Open folder</button></div>}
             {view === 'photos' && (items.length ? <MonthGrid items={shown} onOpen={open} onBroken={onBroken} /> : <div className="panel"><h2>No photos yet</h2><p className="muted">Choose a folder with photos to get started.</p><div className="row"><button className="btn primary" onClick={() => setView('setup')}>Choose folder</button></div></div>)}
+            {view === 'search' && <Search items={shown} all={items} onOpen={open} onSetup={() => setView('setup')} />}
             {view === 'places' && <Places items={shown} onOpen={open} />}
             {view === 'people' && <People items={shown} onOpen={open} readOnly={!DEMO && !gpCount && (isLocal ? needsReopen : !signedIn)} />}
             {view === 'folders' && <Folders folders={folders} items={items} roots={folderRoots} children={fx.children} onPick={(f) => { setFilters({ ...emptyFilters, folderId: f.id }); setShowFilters(true); setView('photos'); }} />}

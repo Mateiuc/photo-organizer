@@ -8,12 +8,14 @@
 //   people-YYYY-MM-DD.json the same, one per day for the last 10 days (in case a day's work needs undoing)
 //   faces-0001.json …      the faces themselves (fingerprint and small picture). Written once, never changed.
 //   pictures-0001.json …   what "Compare pictures" learned about each photo's picture. Written once, never changed.
+//   topics.json            search topics (like "Cars") and the photos each one found
 import { useEffect, useState } from 'react';
 import { openDB } from 'idb';
 import { changes, markBackedUp, ready, replaceAll, subscribe, type StoredFace } from '../faces/people';
 import type { Person } from '../faces/cluster';
 import { libraryEvents, type Library } from './store';
 import { markPicsBackedUp, picChanges, picturesReady, replaceAllPics, subscribePictures, type PicRec } from '../pictures/store';
+import { replaceAllTopics, subscribeTopics, topicChanges, topicsReady, type Topic } from '../search/topics';
 
 export const BACKUP_FOLDER = 'Photo Organizer backup';
 type Dir = FileSystemDirectoryHandle;
@@ -105,6 +107,7 @@ let dir: Dir | null = null;
 let libDirty = false;
 let seen = { edits: 0, faces: 0, resets: 0 };
 let seenPics = 0;
+let seenTopics = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
 let due = 0;
 let wasRunning = false;
@@ -132,6 +135,7 @@ export async function startBackup(library: Library, demo: boolean) {
     else if (changes.faces !== seen.faces || changes.resets !== seen.resets) soon(300_000); // while finding faces: every 5 minutes
   });
   subscribePictures(() => { if (picChanges.n !== seenPics) soon(300_000); }); // while comparing pictures: every 5 minutes
+  subscribeTopics(() => { if (topicChanges.n !== seenTopics) soon(15_000); }); // a search finished or a topic changed
   // Finding faces or comparing pictures stopped or finished: save what it found.
   setInterval(async () => {
     if (!dir) return;
@@ -180,6 +184,7 @@ export async function save(force = false): Promise<void> {
   status.saving = true; status.error = undefined; tell();
   const before = { ...changes };
   const picsBefore = picChanges.n;
+  const topicsBefore = topicChanges.n;
   const libWasDirty = libDirty; libDirty = false;
   try {
     const st = await ready();
@@ -218,6 +223,13 @@ export async function save(force = false): Promise<void> {
       const days = files.filter((n) => /^people-\d{4}-\d\d-\d\d\.json$/.test(n) && n !== `people-${day}.json`).sort();
       for (const old of days.slice(0, Math.max(0, days.length - 9))) await dir.removeEntry(old).catch(() => {});
     }
+    // 2b. Search topics, when they changed (a backup's topics are never replaced by ones that found nothing).
+    const ts = await topicsReady();
+    const anyFound = ts.topics.some((t) => t.keys.length);
+    const hasFile = files.includes('topics.json');
+    if (topicChanges.n !== seenTopics || !hasFile || (force && anyFound)) {
+      await writeJson(dir, 'topics.json', { v: 1, topics: ts.topics });
+    }
     // 3. The library, when it changed (and never an empty one over a full one).
     let photos = prev?.photos ?? 0;
     if (libWasDirty || force || !files.includes('library.json')) {
@@ -233,8 +245,9 @@ export async function save(force = false): Promise<void> {
     for (const n of files) { const c = chunkNo(n, 'pictures'); if (c != null && !usedPics.has(c)) await dir.removeEntry(n).catch(() => {}); }
     seen = before;
     seenPics = picsBefore;
+    seenTopics = topicsBefore;
     status.saved = m; status.savedAt = m.savedAt;
-    status.unsaved = changes.edits !== seen.edits || changes.faces !== seen.faces || picChanges.n !== seenPics || libDirty;
+    status.unsaved = changes.edits !== seen.edits || changes.faces !== seen.faces || picChanges.n !== seenPics || topicChanges.n !== seenTopics || libDirty;
   } catch (e) {
     libDirty ||= libWasDirty;
     status.error = `The backup couldn't be saved: ${(e as Error).message}`;
@@ -303,8 +316,10 @@ async function restoreFrom(target: Dir, parent: string) {
   for (const n of chunks(all, 'pictures').sort((a, b) => a - b)) {
     for (const w of await readJson<PicRow[]>(target, chunkName(n, 'pictures'))) pics.push(fromPicRow(w, n));
   }
+  const topics = await readJson<{ topics: Topic[] }>(target, 'topics.json').catch(() => undefined);
   if (library) await lib.replaceAll(library);
   if (pics.length) await replaceAllPics(pics);
+  if (topics?.topics?.length) await replaceAllTopics(topics.topics);
   if (pf) {
     const people: Person[] = pf.people.map((p) => ({ id: p.id, name: p.name, n: p.n, cover: p.cover, sum: unf32(p.s) }));
     await replaceAll(people, faces, pf.scanned);
@@ -313,6 +328,7 @@ async function restoreFrom(target: Dir, parent: string) {
   await remember(target, parent);
   seen = { ...changes };
   seenPics = picChanges.n;
+  seenTopics = topicChanges.n;
   status.saved = await hasBackup(target); status.savedAt = status.saved?.savedAt; status.unsaved = false;
   tell();
 }

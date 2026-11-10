@@ -3,7 +3,8 @@ import { clientId, listChildren, listComputers, signIn, signOut, type ScanProgre
 import { canWrite, TRASH } from '../local/fs';
 import type { Folder } from '../lib/model';
 import { connect } from '../gphotos/api';
-import { helperVersion } from '../gphotos/bridge';
+import { helperVersion, older, SEARCH_VERSION } from '../gphotos/bridge';
+import { UpdateHelper } from './Search';
 import { BackupPanel } from './Backup';
 
 const EDGE = typeof navigator !== 'undefined' && /\bEdg\//.test(navigator.userAgent);
@@ -40,6 +41,7 @@ function GooglePhotos({ demo, scanning, progressBox, count, lastScan, onScan }: 
         ) : (
           <>
             <p style={{ margin: 0 }}>Helper add-on is installed.{account && <> Google Photos account: <b>{account}</b>.</>}</p>
+            {older(helper, SEARCH_VERSION) && <UpdateHelper have={helper} />}
             {count > 0 && scanning !== 'gp' && <p style={{ margin: 0 }}><b>{count.toLocaleString()}</b> photos and videos from Google Photos{lastScan && <span className="muted"> · read {new Date(lastScan).toLocaleString()}</span>}</p>}
             {scanning === 'gp' && progressBox}
             {!scanning && <div className="row"><button className="btn primary" disabled={demo || busy} onClick={go}>{busy ? 'Connecting…' : count ? 'Read Google Photos again' : 'Read my Google Photos'}</button></div>}

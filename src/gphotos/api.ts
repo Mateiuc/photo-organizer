@@ -241,6 +241,25 @@ export async function scanAlbums(onProgress: (p: GpProgress) => void, signal: { 
   return out;
 }
 
+/**
+ * Google Photos' own search, as in its search box: it knows what is in the pictures (cars, wires…) and reads
+ * text in them (like a VIN). Returns every item found, page by page.
+ */
+export async function searchGp(query: string, onFound: (n: number) => void, signal: { stop: boolean }, max = 50_000): Promise<GpListed[]> {
+  const out: GpListed[] = [];
+  const seen = new Set<string>(), pages = new Set<string>();
+  let next: string | undefined;
+  do {
+    const page = parseTimeline(await rpc('EzkLib', [query, null, next ?? null]));
+    for (const g of page.items) if (!seen.has(g.mediaKey)) { seen.add(g.mediaKey); out.push(g); }
+    onFound(out.length);
+    next = page.next;
+    if (next && pages.has(next)) break; // the same page again: the end
+    if (next) pages.add(next);
+  } while (next && !signal.stop && out.length < max);
+  return out;
+}
+
 /** Camera, place name and albums of one item, for the viewer. */
 const detailCache = new Map<string, Promise<GpDetails>>();
 export function details(it: Item): Promise<GpDetails> {

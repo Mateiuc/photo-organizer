@@ -6,7 +6,7 @@
 // The request formats come from Google Photos Toolkit by xob0t (MIT licence):
 // https://github.com/xob0t/google-photos-toolkit
 
-// What the app may ask for. This version only reads: list the library, read file details and albums.
+// What the app may ask for. This version only reads: list the library, read file details and albums, and search.
 const ALLOWED = new Set([
   'lcxiM', // library page, by date taken
   'EWgK9e', // file name and size for many items
@@ -15,6 +15,7 @@ const ALLOWED = new Set([
   'Z5xsfc', // albums
   'snAcKc', // items in an album
   'EzwWhf', // storage used
+  'EzkLib', // search, as in the Google Photos search box (added in 0.2.0)
 ]);
 const IMAGE_HOSTS = /(^|\.)(googleusercontent\.com|usercontent\.google\.com|ggpht\.com)$/;
 const PHOTOS = 'https://photos.google.com/';
