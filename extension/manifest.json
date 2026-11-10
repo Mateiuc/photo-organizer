@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Photo Organizer helper",
-  "version": "0.2.0",
-  "description": "Lets the Photo Organizer app read your Google Photos library through your own signed-in Google Photos tab. Nothing is sent anywhere else.",
+  "version": "0.3.0",
+  "description": "Lets Photo Organizer read your Google Photos, and move photos you choose to its Trash, through your own signed-in tab.",
   "minimum_chrome_version": "111",
   "permissions": ["scripting"],
   "host_permissions": ["https://photos.google.com/*"],

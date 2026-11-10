@@ -6,7 +6,9 @@
 // The request formats come from Google Photos Toolkit by xob0t (MIT licence):
 // https://github.com/xob0t/google-photos-toolkit
 
-// What the app may ask for. This version only reads: list the library, read file details and albums, and search.
+// What the app may ask for: list the library, read file details and albums, search, and (only when you choose
+// "Move to trash" in the app and confirm) move items to Google Photos' own Trash or bring them back from it.
+// Nothing is ever deleted for good: Google Photos keeps trashed items for 60 days.
 const ALLOWED = new Set([
   'lcxiM', // library page, by date taken
   'EWgK9e', // file name and size for many items
@@ -16,7 +18,10 @@ const ALLOWED = new Set([
   'snAcKc', // items in an album
   'EzwWhf', // storage used
   'EzkLib', // search, as in the Google Photos search box (added in 0.2.0)
+  'XwAOJf', // move to Google Photos' Trash, or restore from it (added in 0.3.0)
 ]);
+// Requests that change something: an answer without a result counts as a failure, never as done.
+const CHANGES = new Set(['XwAOJf']);
 const IMAGE_HOSTS = /(^|\.)(googleusercontent\.com|usercontent\.google\.com|ggpht\.com)$/;
 const PHOTOS = 'https://photos.google.com/';
 
@@ -37,7 +42,7 @@ async function handle(msg) {
     }
     case 'rpc':
       if (!ALLOWED.has(msg.rpcid)) return { error: 'NOT_ALLOWED' };
-      return run(pageRpc, [msg.rpcid, msg.data]);
+      return run(pageRpc, [msg.rpcid, msg.data, CHANGES.has(msg.rpcid)]);
     case 'image': {
       let host = '';
       try { host = new URL(msg.url).hostname; } catch { /* not a URL */ }
@@ -110,7 +115,8 @@ function pageAccount() {
   return { account: g.oPEP7c || '' };
 }
 
-async function pageRpc(rpcid, data) {
+// `change`: the request changes something, so an empty answer means it didn't happen.
+async function pageRpc(rpcid, data, change) {
   const g = window.WIZ_global_data;
   if (!g) return { error: 'NOT_READY' };
   if (!g.SNlM0e) return { error: 'NOT_SIGNED_IN' };
@@ -129,7 +135,11 @@ async function pageRpc(rpcid, data) {
       if (!line) throw new Error('Unexpected answer from Google Photos');
       const outer = JSON.parse(line);
       const payload = outer && outer[0] && outer[0][2];
-      if (!payload) return { data: null }; // nothing there (an empty page)
+      if (!payload) {
+        const code = outer && outer[0] && outer[0][5];
+        if (change) return { error: 'REFUSED', code: Array.isArray(code) ? code.join(', ') : '' };
+        return { data: null }; // nothing there (an empty page)
+      }
       return { data: JSON.parse(payload) };
     } catch (e) {
       last = String((e && e.message) || e);

@@ -3,8 +3,8 @@ import { clientId, listChildren, listComputers, signIn, signOut, type ScanProgre
 import { canWrite, TRASH } from '../local/fs';
 import type { Folder } from '../lib/model';
 import { connect } from '../gphotos/api';
-import { helperVersion, older, SEARCH_VERSION } from '../gphotos/bridge';
-import { UpdateHelper } from './Search';
+import { helperVersion, LATEST_HELPER, older } from '../gphotos/bridge';
+import { UpdateHelper } from './Helper';
 import { BackupPanel } from './Backup';
 
 const EDGE = typeof navigator !== 'undefined' && /\bEdg\//.test(navigator.userAgent);
@@ -41,12 +41,12 @@ function GooglePhotos({ demo, scanning, progressBox, count, lastScan, onScan }: 
         ) : (
           <>
             <p style={{ margin: 0 }}>Helper add-on is installed.{account && <> Google Photos account: <b>{account}</b>.</>}</p>
-            {older(helper, SEARCH_VERSION) && <UpdateHelper have={helper} />}
+            {older(helper, LATEST_HELPER) && <UpdateHelper have={helper} what="search and Move to trash" />}
             {count > 0 && scanning !== 'gp' && <p style={{ margin: 0 }}><b>{count.toLocaleString()}</b> photos and videos from Google Photos{lastScan && <span className="muted"> · read {new Date(lastScan).toLocaleString()}</span>}</p>}
             {scanning === 'gp' && progressBox}
             {!scanning && <div className="row"><button className="btn primary" disabled={demo || busy} onClick={go}>{busy ? 'Connecting…' : count ? 'Read Google Photos again' : 'Read my Google Photos'}</button></div>}
             {err && <p className="error">{err}</p>}
-            <p className="muted">The app uses a Google Photos tab in this browser. If none is open, it opens one in the background: leave it open while the app works. Reading takes about a minute for every 10,000 photos and videos; after that the app opens instantly. Removing or changing photos in Google Photos isn't switched on yet.</p>
+            <p className="muted">The app uses a Google Photos tab in this browser. If none is open, it opens one in the background: leave it open while the app works. Reading takes about a minute for every 10,000 photos and videos; after that the app opens instantly. To remove photos, tick them on any page (Select) and choose Move to trash: they go to Google Photos' own Trash, where they can be restored for 60 days.</p>
           </>
         )}
     </section>
@@ -120,7 +120,7 @@ export function Setup({ source, localName, onChooseFolder, onChooseFiles, roots,
       {demo && <div className="notice">You're looking at sample photos. Remove <code>?demo</code> from the address to use your own.</div>}
       <section className="panel">
         <h2>Choose a folder with photos</h2>
-        <p className="muted">Pick any folder: on this computer, on a USB disk or memory card, or a Google Drive, OneDrive or Dropbox folder synced to this PC. Subfolders are included. Nothing is uploaded and nothing is moved: the app only reads the files where they are.</p>
+        <p className="muted">Pick any folder: on this computer, on a USB disk or memory card, or a Google Drive, OneDrive or Dropbox folder synced to this PC. Subfolders are included. Nothing is uploaded, and nothing is moved unless you choose Move to trash: then the files go into a _Trash folder inside it.</p>
         <p className="notice" style={{ margin: 0 }}>Photos in Google Drive? Use <b>“Or read Google Drive directly”</b> below instead. It reads dates, places and duplicates straight from Google without downloading your photos, so it's much faster and uses no disk space.</p>
         {source === 'local' && localName && !scanning && <p>Current folder: <b>{localName}</b>{lastScan && <span className="muted"> · read {new Date(lastScan).toLocaleString()}</span>}</p>}
         {!scanning && (

@@ -7,6 +7,10 @@ export const RELOAD = 'The helper add-on was just updated. Reload this page (F5)
 export const OLD_HELPER = 'The helper add-on needs updating for this. Download the new version and follow the update steps below.';
 /** The add-on version that can search. */
 export const SEARCH_VERSION = '0.2.0';
+/** The add-on version that can move items to Google Photos' Trash and back. */
+export const TRASH_VERSION = '0.3.0';
+/** The newest add-on version (what the download is). */
+export const LATEST_HELPER = TRASH_VERSION;
 /** True when version a is older than b ("0.1.0" < "0.2.0"). */
 export const older = (a: string, b: string) => { const x = a.split('.').map(Number), y = b.split('.').map(Number); for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0); return false; };
 
@@ -40,6 +44,7 @@ export async function ask<T = any>(msg: Record<string, unknown>, timeoutMs = 120
   if (res.error === 'NOT_SIGNED_IN') throw new Error(NOT_SIGNED_IN);
   if (res.error === 'RELOAD_PAGE') throw new Error(RELOAD);
   if (res.error === 'NOT_ALLOWED') throw new Error(OLD_HELPER);
+  if (res.error === 'REFUSED') throw new Error(`Google Photos didn't accept the change${res.code ? ` (code ${res.code})` : ''}.`);
   if (res.error === 'TIMEOUT') throw new Error('Google Photos took too long to answer. Try again in a moment.');
   if (res.error) throw new Error('Google Photos: ' + res.error);
   return res as T;

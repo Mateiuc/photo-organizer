@@ -6,22 +6,8 @@ import { clearLearning, deleteTopic, editTopic, markTopic, marksSig, members, pa
 import { learnTopic, withFingerprint } from '../search/teach';
 import { MonthGrid, Thumb } from './Grid';
 import { when } from './Backup';
-
-const EDGE = typeof navigator !== 'undefined' && /\bEdg\//.test(navigator.userAgent);
-
-/** How to put the new helper add-on in place of the old one. */
-export function UpdateHelper({ have }: { have?: string }) {
-  return (
-    <div className="notice">
-      <p style={{ marginTop: 0 }}><b>The helper add-on needs an update for search</b>{have ? ` (this browser has version ${have}; search needs ${SEARCH_VERSION})` : ''}. It takes a minute:</p>
-      <ol className="steps">
-        <li><a href={`${import.meta.env.BASE_URL}photo-organizer-helper.zip`} download>Download the new helper</a> and unzip it over the old helper folder, replacing the files.</li>
-        <li>Open <code>{EDGE ? 'edge://extensions' : 'chrome://extensions'}</code> and click the reload button (circular arrow) on “Photo Organizer helper”.</li>
-        <li>Come back here and reload this page.</li>
-      </ol>
-    </div>
-  );
-}
+import { UpdateHelper } from './Helper';
+import { useShownList } from '../lib/selection';
 
 type Mark = 'yes' | 'no' | null;
 const markOf = (t: Topic, id: string): Mark => (t.yes?.includes(id) ? 'yes' : t.no?.includes(id) ? 'no' : null);
@@ -30,7 +16,7 @@ const markOf = (t: Topic, id: string): Mark => (t.yes?.includes(id) ? 'yes' : t.
 function MarkTile({ it, mark, sure, onMark, onOpen }: { it: Item; mark: Mark; sure?: number; onMark: (m: Mark) => void; onOpen: () => void }) {
   return (
     <div className={`mtile ${mark ?? ''}`}>
-      <Thumb item={it} onOpen={onOpen} />
+      <Thumb item={it} onOpen={onOpen} selectable />
       <div className="marks">
         <button className={mark === 'yes' ? 'on' : ''} title="Belongs to this topic" aria-label={`${it.name} belongs`} aria-pressed={mark === 'yes'} onClick={() => onMark(mark === 'yes' ? null : 'yes')}>✓</button>
         <button className={mark === 'no' ? 'on' : ''} title="Doesn't belong" aria-label={`${it.name} doesn't belong`} aria-pressed={mark === 'no'} onClick={() => onMark(mark === 'no' ? null : 'no')}>✗</button>
@@ -44,6 +30,8 @@ function MarkTile({ it, mark, sure, onMark, onOpen }: { it: Item; mark: Mark; su
 function MarkGrid({ items, t, sureOf, onOpen }: { items: Item[]; t: Topic; sureOf?: Map<string, number>; onOpen: (list: Item[], i: number) => void }) {
   const [limit, setLimit] = useState(300);
   const sentinel = useRef<HTMLDivElement>(null);
+  const order = useMemo(() => items.map((x) => x.id), [items]);
+  useShownList(order);
   useEffect(() => setLimit(300), [items]);
   useEffect(() => {
     const el = sentinel.current;
@@ -247,7 +235,7 @@ export function Search({ items, all, onOpen, onSetup }: { items: Item[]; all: It
         ) : (
           <p className="muted" style={{ margin: 0 }}>Open a photo and mark it ✓ for a topic (in the side panel), mark a few that don't belong ✗, then <b>Find more like these</b>: the app learns from your marks on this computer and looks through all your photos. Google Photos' search can also start a topic once your Google Photos library is read (<button className="link" onClick={onSetup}>Choose photos</button>).</p>
         )}
-        {gp && (needsUpdate || st.run.error === OLD_HELPER || freeErr === OLD_HELPER) && <UpdateHelper have={version} />}
+        {gp && (needsUpdate || st.run.error === OLD_HELPER || freeErr === OLD_HELPER) && <UpdateHelper have={version} need={SEARCH_VERSION} what="search" />}
         {gp && !version && <p className="notice" style={{ margin: 0 }}>The helper add-on isn't installed in this browser, so Google Photos' search can't run. See Choose photos › Google Photos.</p>}
         {gp && (
           <div className="row">

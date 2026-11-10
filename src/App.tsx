@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getFile, NEEDS_SIGN_IN, prepareSignIn, scanFolders, signIn, trashFile, type ScanProgress } from './drive/api';
+import { getFile, NEEDS_SIGN_IN, prepareSignIn, scanFolders, signIn, trashFile, untrashFile, type ScanProgress } from './drive/api';
 import { demoLibrary } from './lib/demo';
 import { applyFilters, emptyFilters, exactDuplicates, monthLabel, toItem, type Filters, type Folder, type Item, type Kind } from './lib/model';
 import { folderIndex, Library, type Meta } from './lib/store';
-import { askAccess, canWrite, fingerprint, isOpen, moveToTrash, pickFolder, rememberedFolder, scanFileList, scanFolder } from './local/fs';
+import { askAccess, canWrite, fingerprint, isOpen, moveToTrash, pickFolder, rememberedFolder, restoreFromTrash, scanFileList, scanFolder } from './local/fs';
 import { clearThumbs } from './local/thumbs';
 import { Duplicates } from './views/Duplicates';
 import { Folders } from './views/Folders';
@@ -11,7 +11,10 @@ import { MonthGrid } from './views/Grid';
 import { Places } from './views/Places';
 import { People } from './views/People';
 import { namesByItem } from './faces/people';
-import { albumFolderId, GP_ROOT, scanAlbums, scanLibrary } from './gphotos/api';
+import { albumFolderId, GP_ROOT, restoreGp, scanAlbums, scanLibrary, trashGp } from './gphotos/api';
+import { helperVersion } from './gphotos/bridge';
+import { forgetTicks, startSelecting, stopSelecting, useSelecting } from './lib/selection';
+import { SelectBar, TrashConfirm, UndoBar, type TrashJob, type UndoState } from './views/Trash';
 import { Setup } from './views/Setup';
 import { Viewer } from './views/Viewer';
 import { allowAgain, startBackup, useBackup } from './lib/backup';
@@ -36,6 +39,7 @@ export default function App() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [showFilters, setShowFilters] = useState(false);
   const [viewer, setViewer] = useState<{ list: Item[]; i: number } | null>(null);
+  const viewerRef = useRef(viewer); viewerRef.current = viewer;
   const [signedIn, setSignedIn] = useState(() => { try { return localStorage.getItem('po.signedIn') === '1'; } catch { return false; } });
   const [scanning, setScanning] = useState<false | 'local' | 'drive' | 'gp'>(false);
   const [progress, setProgress] = useState<ScanProgress | null>(null);
@@ -69,6 +73,7 @@ export default function App() {
   }, []);
 
   const fx = useMemo(() => folderIndex(folders), [folders]);
+  const byId = useMemo(() => new Map(items.map((x) => [x.id, x])), [items]);
   const topics = useTopics();
   const shown = useMemo(() => {
     // People's names and search topics (like "VIN") are searchable too.
@@ -202,26 +207,117 @@ export default function App() {
   }, [scanDir, chooseFolder]);
 
   const itemsRef = useRef(items); itemsRef.current = items;
-  const trash = useCallback(async (ids: string[]) => {
-    const done: string[] = [];
-    const by = new Map(itemsRef.current.map((x) => [x.id, x]));
-    if (!DEMO && ids.some((id) => by.get(id)?.gp)) throw new Error('Removing from Google Photos isn’t switched on yet. It comes in the next step, once reading your library works well. Untick the Google Photos copies to remove the others.');
-    if (!DEMO && ids.some((id) => !by.get(id)?.local)) await signIn(); // first, while the click still allows a popup
+  /**
+   * Moves items to the trash of the place they live in: Google Photos' Trash, Drive's trash, or the _Trash folder.
+   * Stops at the first problem; whatever was already moved is returned (and forgotten by the library) either way.
+   */
+  const trash = useCallback(async (list: Item[], onMoved?: (n: number) => void): Promise<{ done: Item[]; error?: string }> => {
+    const done: Item[] = [];
+    const tell = () => onMoved?.(done.length);
     try {
-      for (let i = 0; i < ids.length; i += 5) {
-        const batch = ids.slice(i, i + 5);
-        if (!DEMO) {
-          const local = batch.filter((id) => by.get(id)?.local);
-          for (const id of local) { await moveToTrash(by.get(id)!); done.push(id); }
-          await Promise.all(batch.filter((id) => !by.get(id)?.local).map((id) => trashFile(id)));
-          done.push(...batch.filter((id) => !by.get(id)?.local));
-        } else done.push(...batch);
+      if (DEMO) { done.push(...list); return { done }; }
+      const gp = list.filter((x) => x.gp), local = list.filter((x) => x.local), drive = list.filter((x) => !x.gp && !x.local);
+      if (drive.length) await signIn(); // first, while the click still allows a popup
+      if (gp.length) {
+        const byKey = new Map(gp.filter((x) => x.gp!.dedup).map((x) => [x.gp!.dedup, x]));
+        if (byKey.size < gp.length) throw new Error('Some Google Photos items are missing their Google Photos key. Read Google Photos again (Choose photos), then try again.');
+        await trashGp([...byKey.keys()], (part) => { part.forEach((k) => done.push(byKey.get(k)!)); tell(); });
       }
+      for (const x of local) { await moveToTrash(x); done.push(x); tell(); }
+      for (let i = 0; i < drive.length; i += 5) {
+        const part = drive.slice(i, i + 5);
+        const r = await Promise.allSettled(part.map((x) => trashFile(x.id)));
+        r.forEach((o, j) => o.status === 'fulfilled' && done.push(part[j]));
+        tell();
+        const bad = r.find((o): o is PromiseRejectedResult => o.status === 'rejected');
+        if (bad) throw bad.reason;
+      }
+      return { done };
+    } catch (e) {
+      return { done, error: (e as Error).message || String(e) };
     } finally {
-      await lib.removeItems(done);
-      setItems((prev) => prev.filter((x) => !done.includes(x.id)));
+      const gone = new Set(done.map((x) => x.id));
+      if (gone.size) {
+        await lib.removeItems([...gone]);
+        setItems((prev) => prev.filter((x) => !gone.has(x.id)));
+        forgetTicks(gone);
+      }
     }
   }, []);
+
+  /** Undo: takes items back out of the trash and into the library. */
+  const untrash = useCallback(async (list: Item[]): Promise<{ done: Item[]; error?: string }> => {
+    const done: Item[] = [];
+    try {
+      if (DEMO) { done.push(...list); return { done }; }
+      const gp = list.filter((x) => x.gp), local = list.filter((x) => x.local), drive = list.filter((x) => !x.gp && !x.local);
+      if (drive.length) await signIn();
+      if (gp.length) {
+        const byKey = new Map(gp.map((x) => [x.gp!.dedup, x]));
+        await restoreGp([...byKey.keys()], (part) => { part.forEach((k) => done.push(byKey.get(k)!)); });
+      }
+      for (const x of local) { await restoreFromTrash(x); done.push(x); }
+      for (let i = 0; i < drive.length; i += 5) {
+        const part = drive.slice(i, i + 5);
+        const r = await Promise.allSettled(part.map((x) => untrashFile(x.id)));
+        r.forEach((o, j) => o.status === 'fulfilled' && done.push(part[j]));
+        const bad = r.find((o): o is PromiseRejectedResult => o.status === 'rejected');
+        if (bad) throw bad.reason;
+      }
+      return { done };
+    } catch (e) {
+      return { done, error: (e as Error).message || String(e) };
+    } finally {
+      if (done.length) {
+        await lib.putItems(done);
+        setItems((prev) => { const by = new Map(prev.map((x) => [x.id, x])); done.forEach((x) => by.set(x.id, x)); return [...by.values()]; });
+      }
+    }
+  }, []);
+
+  // The confirm window, and Undo for the last move.
+  const [job, setJob] = useState<TrashJob | null>(null);
+  const [undo, setUndo] = useState<UndoState | null>(null);
+  const askTrash = useCallback((ids: string[]) => {
+    const by = new Map(itemsRef.current.map((x) => [x.id, x]));
+    const list = ids.map((id) => by.get(id)).filter((x): x is Item => !!x);
+    if (list.length) setJob({ items: list });
+  }, []);
+  const runTrash = useCallback(async () => {
+    if (!job || job.busy) return;
+    const total = job.items.length;
+    setJob({ ...job, busy: { done: 0, total }, error: undefined });
+    const r = await trash(job.items, (done) => setJob((j) => (j ? { ...j, busy: { done, total } } : j)));
+    if (r.done.length) setUndo({ items: r.done });
+    if (r.error) {
+      const moved = new Set(r.done.map((x) => x.id));
+      const left = job.items.filter((x) => !moved.has(x.id));
+      setJob({ items: left, error: (r.done.length ? `Moved ${r.done.length.toLocaleString()} of ${total.toLocaleString()}, then stopped: ` : '') + r.error });
+    } else {
+      setJob(null);
+      stopSelecting();
+    }
+  }, [job, trash]);
+  const runUndo = useCallback(async () => {
+    if (!undo || undo.busy) return;
+    setUndo({ ...undo, busy: true, error: undefined });
+    const r = await untrash(undo.items);
+    const back = new Set(r.done.map((x) => x.id));
+    const left = undo.items.filter((x) => !back.has(x.id));
+    if (r.error) setUndo({ items: left.length ? left : undo.items, error: (r.done.length ? `Put back ${r.done.length.toLocaleString()}, then stopped: ` : 'Undo failed: ') + r.error });
+    else setUndo({ items: undo.items, restored: true });
+  }, [undo, untrash]);
+
+  // Select mode: per page. Escape leaves it.
+  const selecting = useSelecting();
+  useEffect(() => { stopSelecting(); }, [view]);
+  useEffect(() => {
+    if (!selecting) return;
+    const f = (e: KeyboardEvent) => { if (e.key === 'Escape' && !viewerRef.current && !jobRef.current) stopSelecting(); };
+    window.addEventListener('keydown', f);
+    return () => window.removeEventListener('keydown', f);
+  }, [selecting]);
+  const jobRef = useRef(job); jobRef.current = job;
 
   // Drive preview links expire after some hours: refresh one when it fails to load.
   const refreshing = useRef(new Set<string>());
@@ -249,7 +345,7 @@ export default function App() {
   const bk = useBackup();
   if (!loaded) return <div className="more">Opening your library…</div>;
   return (
-    <div className="shell">
+    <div className={`shell${selecting || undo ? ' has-bottom' : ''}`}>
       <nav className="rail" aria-label="Views">
         <div className="brand"><img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" />Photo Organizer</div>
         {nav('photos', 'Photos', items.length)}
@@ -279,6 +375,7 @@ export default function App() {
               <button className={`chip ${showFilters ? 'on' : ''}`} onClick={() => setShowFilters(!showFilters)}>More filters</button>
               {active ? <button className="chip" onClick={() => setFilters(emptyFilters)}>Clear</button> : null}
               <span className="count">{shown.length.toLocaleString()} of {items.length.toLocaleString()}</span>
+              {view !== 'duplicates' && items.length > 0 && <button className={`btn small ${selecting ? 'primary' : ''}`} id="select" onClick={() => (selecting ? stopSelecting() : startSelecting())} title="Tick photos to move them to the trash">{selecting ? 'Done selecting' : 'Select'}</button>}
             </>
           )}
         </header>
@@ -304,12 +401,19 @@ export default function App() {
             {view === 'places' && <Places items={shown} onOpen={open} />}
             {view === 'people' && <People items={shown} onOpen={open} readOnly={!DEMO && !gpCount && (isLocal ? needsReopen : !signedIn)} />}
             {view === 'folders' && <Folders folders={folders} items={items} roots={folderRoots} children={fx.children} onPick={(f) => { setFilters({ ...emptyFilters, folderId: f.id }); setShowFilters(true); setView('photos'); }} />}
-            {view === 'duplicates' && <Duplicates items={shown} all={items} similar={similar} pathOf={fx.pathOf} onTrash={trash} onOpen={open} readOnly={!DEMO && (isLocal ? !canWrite || needsReopen : !signedIn)} local={isLocal} />}
+            {view === 'duplicates' && <Duplicates items={shown} all={items} similar={similar} pathOf={fx.pathOf} onTrash={(list) => askTrash(list.map((x) => x.id))} onOpen={open} readOnly={!DEMO && (isLocal ? !canWrite || needsReopen : !signedIn)} local={isLocal} />}
             {view === 'setup' && <Setup demo={DEMO} source={meta.source} localName={meta.localName} onChooseFolder={chooseFolder} onChooseFiles={chooseFiles} roots={meta.source === 'drive' ? meta.roots : []} signedIn={signedIn} setSignedIn={setSignedIn} onScan={scan} scanning={scanning} progress={progress} onStop={() => { stopRef.current.stop = true; }} lastScan={meta.lastScan} onClear={async () => { await lib.clear(); setItems([]); setFolders([]); setMeta({ roots: [] }); }} gpCount={gpCount} gpLastScan={meta.gpLastScan} onScanGp={scanGp} />}
           </main>
         </div>
       </div>
       {viewer && <Viewer list={viewer.list} index={viewer.i} setIndex={(i) => setViewer({ ...viewer, i })} pathOf={fx.pathOf} onClose={() => setViewer(null)} />}
+      {(selecting || undo) && (
+        <div className="bottom">
+          {undo && <UndoBar undo={undo} onUndo={runUndo} onClose={() => setUndo(null)} />}
+          <SelectBar exists={(id) => byId.has(id)} onTrash={askTrash} />
+        </div>
+      )}
+      {job && <TrashConfirm job={job} demo={DEMO} helper={helperVersion()} localName={meta.localName} localReady={isOpen()} localWritable={canWrite} onConfirm={runTrash} onCancel={() => setJob(null)} />}
     </div>
   );
 }

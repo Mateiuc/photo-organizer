@@ -5,8 +5,12 @@ What it does
   Lets the Photo Organizer app (https://mateiuc.github.io/photo-organizer/) read your
   Google Photos library through your own signed-in Google Photos tab, the same way the
   Google Photos website does. Nothing is downloaded and nothing is sent anywhere else.
-  This version only reads: it lists your photos and videos, their details and albums,
-  and searches them the way the Google Photos search box does.
+  It lists your photos and videos, their details and albums, and searches them the way
+  the Google Photos search box does.
+  Since version 0.3.0 it can also move photos you choose in the app to Google Photos'
+  own Trash (and bring them back). That only happens after you confirm in the app.
+  Google Photos keeps trashed items for 60 days, so they can be restored from
+  photos.google.com > Trash. Nothing is deleted for good.
 
 Install (once)
   1. Unzip this folder somewhere you will keep it, for example

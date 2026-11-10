@@ -11,6 +11,35 @@ async function rpc(rpcid: string, data: unknown): Promise<any> {
   return (await ask<{ data: any }>({ op: 'rpc', rpcid, data })).data;
 }
 
+/** Splits a list into parts of at most n. */
+export function inParts<T>(list: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n));
+  return out;
+}
+
+/** Google Photos takes up to this many items in one trash or restore request. */
+export const TRASH_PART = 250;
+
+/**
+ * Moves items to Google Photos' own Trash (kept there 60 days, then Google deletes them). Needs helper add-on 0.3.0.
+ * `onPart` is told after each part, so items already moved are known even if a later part fails.
+ */
+export async function trashGp(dedupKeys: string[], onPart?: (done: string[]) => void | Promise<void>): Promise<void> {
+  for (const part of inParts(dedupKeys, TRASH_PART)) {
+    await rpc('XwAOJf', [null, 1, part, 3]);
+    await onPart?.(part);
+  }
+}
+
+/** Brings items back from Google Photos' Trash. */
+export async function restoreGp(dedupKeys: string[], onPart?: (done: string[]) => void | Promise<void>): Promise<void> {
+  for (const part of inParts(dedupKeys, TRASH_PART)) {
+    await rpc('XwAOJf', [null, 3, part, 2]);
+    await onPart?.(part);
+  }
+}
+
 export async function connect(): Promise<string> {
   return (await ask<{ account: string }>({ op: 'connect' }, 90000)).account;
 }

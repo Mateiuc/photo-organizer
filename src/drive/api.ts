@@ -188,9 +188,12 @@ export async function scanFolders(
 }
 
 /** Moves a file to the Drive trash (recoverable for 30 days). */
-export async function trashFile(id: string): Promise<void> {
-  await call(`/files/${id}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) });
+export async function trashFile(id: string, trashed = true): Promise<void> {
+  await call(`/files/${id}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed }) });
 }
+
+/** Takes a file back out of Drive's trash. */
+export const untrashFile = (id: string) => trashFile(id, false);
 
 /** Saves the app's tags on the file itself, so they travel with it to every device. */
 export async function setTags(id: string, tags: string[]): Promise<void> {

@@ -212,3 +212,25 @@ export async function moveToTrash(item: Item): Promise<void> {
   await parent.removeEntry(item.name);
   files.delete(item.id);
 }
+
+/** Puts a file moved by moveToTrash back where it was (Undo). */
+export async function restoreFromTrash(item: Item): Promise<void> {
+  if (!root) throw new Error('Open the folder again first (Choose photos).');
+  const parent = item.folderId ? dirs.get(item.folderId) : undefined;
+  if (!parent) throw new Error(`Can't find the folder of ${item.name}. Scan the folder again.`);
+  if (!(await askAccess(root, true))) throw new Error('The app needs permission to change files in this folder.');
+  let from = await root.getDirectoryHandle(TRASH);
+  for (const part of item.id.slice('local:'.length).split('/').slice(1, -1)) from = await from.getDirectoryHandle(part);
+  const h = await from.getFileHandle(item.name);
+  const taken = await parent.getFileHandle(item.name).then(() => true, () => false);
+  if (taken) throw new Error(`There is already a file called ${item.name} in its folder, so it was left in ${TRASH}.`);
+  const fh = h as any;
+  if (typeof fh.move === 'function') {
+    try { await fh.move(parent); files.set(item.id, h); return; } catch { /* fall back to copy + delete */ }
+  }
+  const out = await parent.getFileHandle(item.name, { create: true });
+  const w = await (out as any).createWritable();
+  await (await h.getFile()).stream().pipeTo(w);
+  await from.removeEntry(item.name);
+  files.set(item.id, out);
+}

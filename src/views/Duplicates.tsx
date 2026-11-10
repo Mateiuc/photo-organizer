@@ -6,7 +6,6 @@ import { comparable, comparePictures, needsLook, retryFailed, stopComparing, use
 import { Preview } from './Grid';
 
 type Tab = 'exact' | 'same' | 'alike' | 'empty';
-const canRemove = (x: Item) => !x.gp; // removing from Google Photos comes in a later step
 const newest = (a: Item[], b: Item[]) => (b[0].takenAt ?? '').localeCompare(a[0].takenAt ?? '');
 
 /** One copy's details, so differences between copies are easy to see. */
@@ -60,8 +59,10 @@ function ComparePanel({ all, readOnly, similar }: { all: Item[]; readOnly: boole
 }
 
 export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readOnly, local }: {
-  items: Item[]; all: Item[]; similar: Similar; pathOf: (id?: string) => string; onTrash: (ids: string[]) => Promise<void>; onOpen: (list: Item[], i: number) => void; readOnly: boolean; local?: boolean;
+  items: Item[]; all: Item[]; similar: Similar; pathOf: (id?: string) => string; onTrash: (list: Item[]) => void; onOpen: (list: Item[], i: number) => void; readOnly: boolean; local?: boolean;
 }) {
+  // Google Photos copies go to Google Photos' Trash through the helper add-on; files in a folder or Drive need it open.
+  const canRemove = (x: Item) => !!x.gp || !readOnly;
   const [tab, setTab] = useState<Tab>('exact');
   const pics = usePictures();
   const [alike, setAlike] = useState(() => { try { return Number(localStorage.getItem('po.alike')) || 90; } catch { return 90; } });
@@ -70,7 +71,8 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
   const exact = useMemo(() => exactDuplicates(items), [items]);
   const same = useMemo(() => inView(similar.same).sort(newest), [similar.same, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
   const alikeGroups = useMemo(() => inView(lookAlikes(similar.pairs, alike / 100).map((g) => g.map((i) => similar.byIndex[i]).sort((a, b) => (a.takenAt ?? '').localeCompare(b.takenAt ?? '')))).sort(newest), [similar.pairs, similar.byIndex, alike, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
-  const empty = useMemo(() => { const e = items.filter((x) => x.size === 0); return e.length ? [e] : []; }, [items]);
+  // Google Photos items whose size isn't known yet also show 0 bytes, so they never count as empty.
+  const empty = useMemo(() => { const e = items.filter((x) => x.size === 0 && !x.gp); return e.length ? [e] : []; }, [items]);
   const groups = tab === 'exact' ? exact : tab === 'same' ? same : tab === 'alike' ? alikeGroups : empty;
   const rec = (x: Item) => pics.recs.get(x.id);
   // Picture size: from the file's own data, or else as measured when the picture was compared.
@@ -92,8 +94,10 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
     if (tab === 'alike') return out;
     for (const g of groups) {
       const keep = keeperOf(g);
-      if (tab === 'exact') g.forEach((x) => x !== keep && canRemove(x) && out.add(x.id));
-      else g.forEach((x) => canRemove(x) && reason(x, keep) && out.add(x.id));
+      // A Google Photos copy is only suggested when the copy kept is in Google Photos too; otherwise it's your choice.
+      const ok = (x: Item) => canRemove(x) && (!x.gp || !!keep.gp);
+      if (tab === 'exact') g.forEach((x) => x !== keep && ok(x) && out.add(x.id));
+      else g.forEach((x) => ok(x) && reason(x, keep) && out.add(x.id));
     }
     return out;
   }, [groups, pathOf, tab, pics.v]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -111,13 +115,9 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
 
   const chosen = groups.flatMap((g) => g.filter(isOut));
   const space = chosen.reduce((s, x) => s + x.size, 0);
-  const [confirm, setConfirm] = useState(false);
-  const [busy, setBusy] = useState('');
   const [limit, setLimit] = useState(60);
-  const where = local ? 'the _Trash folder' : 'Drive trash';
-  const go = (t: Tab) => { setTab(t); setLimit(60); setConfirm(false); };
+  const go = (t: Tab) => { setTab(t); setLimit(60); };
   const extras = (gs: Item[][]) => gs.reduce((s, g) => s + g.length - 1, 0);
-  const hasGp = groups.some((g) => g.some((x) => x.gp));
 
   return (
     <div className="stack" style={{ maxWidth: 'none' }}>
@@ -147,17 +147,8 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
             <label className="row slider">How alike: <input type="range" min={80} max={98} step={1} value={alike} onChange={(e) => { const v = Number(e.target.value); setAlike(v); try { localStorage.setItem('po.alike', String(v)); } catch { /* only a convenience */ } }} /> <b>{alike}%</b></label>
           </>
         )}
-        {hasGp && <p className="muted">Removing from Google Photos isn't switched on yet: that comes in the next step, once you say go. The Google Photos copies show here so you can see what's duplicated.</p>}
-        {!readOnly && !confirm && <div className="row"><button className="btn danger" disabled={!!busy || !chosen.length} onClick={() => setConfirm(true)}>Move {chosen.length.toLocaleString()} marked {chosen.length === 1 ? 'file' : 'files'} to {where}</button><span className="muted">{busy}</span></div>}
-        {confirm && (
-          <div className="confirm">
-            <span>Move {chosen.length.toLocaleString()} files ({fmtSize(space)}) {local ? "into the _Trash folder inside your photo folder? Nothing is deleted; you can check them there and delete the folder when you're sure." : 'to your Google Drive trash? You can restore them from the trash for 30 days.'}</span>
-            <div className="row">
-              <button className="btn danger" onClick={async () => { setConfirm(false); setBusy('Moving…'); try { await onTrash(chosen.map((x) => x.id)); setBusy('Done.'); } catch (e) { setBusy(String((e as Error).message)); } }}>Yes, move them</button>
-              <button className="btn" onClick={() => setConfirm(false)}>Cancel</button>
-            </div>
-          </div>
-        )}
+        {groups.some((g) => g.some((x) => x.gp)) && <p className="muted" style={{ margin: 0 }}>Google Photos copies can be removed too: they go to Google Photos' Trash (restorable for 60 days). The app only suggests removing a Google Photos copy when the copy it keeps is also in Google Photos; otherwise click it yourself.</p>}
+        {groups.some((g) => g.some(canRemove)) && <div className="row"><button className="btn danger" disabled={!chosen.length} onClick={() => onTrash(chosen)}>Move {chosen.length.toLocaleString()} marked {chosen.length === 1 ? 'copy' : 'copies'} to the trash…</button><span className="muted">You'll see them and where they go before anything moves.</span></div>}
       </div>
       {!groups.length && <p className="muted">{tab === 'exact' ? 'No identical files found.' : tab === 'same' ? (similar.compared ? 'No other copies of the same photo found so far.' : 'Compare the pictures first.') : tab === 'alike' ? (similar.compared ? 'No look-alikes at this setting.' : 'Compare the pictures first.') : ''}</p>}
       {groups.slice(0, limit).map((g0) => {
@@ -181,7 +172,7 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
                     <div className="meta">
                       {canRemove(x)
                         ? <button className={`pick ${out ? 'extra' : 'keep'}`} disabled={last} title={last ? 'At least one copy is always kept' : undefined} onClick={() => toggle(x, g)}>{out ? '✕ Remove' : '✓ Keep'}</button>
-                        : <span className="pick keep" title="Removing from Google Photos comes in the next step">Google Photos</span>}
+                        : <span className="pick keep" title="Open your photos first (Choose photos) to remove copies">✓ Keep</span>}
                       <Details x={x} pathOf={pathOf} why={reason(x, keep)} note={note} dims={dims(x)} />
                     </div>
                   </div>
