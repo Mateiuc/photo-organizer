@@ -225,7 +225,7 @@ export async function save(force = false): Promise<void> {
     }
     // 2b. Search topics, when they changed (a backup's topics are never replaced by ones that found nothing).
     const ts = await topicsReady();
-    const anyFound = ts.topics.some((t) => t.keys.length);
+    const anyFound = ts.topics.some((t) => t.keys.length || t.yes?.length || t.no?.length);
     const hasFile = files.includes('topics.json');
     if (topicChanges.n !== seenTopics || !hasFile || (force && anyFound)) {
       await writeJson(dir, 'topics.json', { v: 1, topics: ts.topics });

@@ -14,6 +14,47 @@ export interface Topic {
   counts?: Record<string, number>;
   at?: string; // when last searched
   preset?: boolean;
+  /** Photos marked as belonging (yes) or not (no), by item id. They teach "Find more like these". */
+  yes?: string[];
+  no?: string[];
+  /** What learning from the marks found: item ids, best first, and how sure each one is (0 to 1). */
+  found?: string[];
+  foundP?: number[];
+  learnedAt?: string;
+  /** Which marks the last learning used, to tell when they changed. */
+  learnedFrom?: string;
+  /** How sure a learned match must be to count (0 to 1). */
+  sure?: number;
+  /** Count only learned matches that Google's search found too. */
+  onlyGoogle?: boolean;
+}
+
+/** How sure a learned match must be, unless the topic says otherwise. */
+export const SURE = 0.5;
+
+/** A short fingerprint of a topic's marks. */
+export function marksSig(t: Pick<Topic, 'yes' | 'no'>): string {
+  const text = [...(t.yes ?? [])].sort().join(',') + '|' + [...(t.no ?? [])].sort().join(',');
+  let h = 5381;
+  for (let i = 0; i < text.length; i++) h = (Math.imul(h, 33) + text.charCodeAt(i)) >>> 0;
+  return `${t.yes?.length ?? 0}:${t.no?.length ?? 0}:${h.toString(36)}`;
+}
+
+/**
+ * The photos a topic stands for, by item id: once it has learned from marks, the Yes photos and the learned
+ * matches (never the No photos); before that, what Google Photos' search found.
+ */
+export function members(t: Topic): string[] {
+  if (!t.learnedAt) return t.keys.map((k) => 'gp:' + k).filter((id) => !t.no?.includes(id));
+  const no = new Set(t.no ?? []);
+  const sure = t.sure ?? SURE;
+  const google = t.onlyGoogle && t.keys.length ? new Set(t.keys.map((k) => 'gp:' + k)) : null;
+  const out = (t.yes ?? []).filter((id) => !no.has(id));
+  const seen = new Set(out);
+  (t.found ?? []).forEach((id, i) => {
+    if ((t.foundP?.[i] ?? 0) >= sure && !no.has(id) && !seen.has(id) && (!google || google.has(id))) { out.push(id); seen.add(id); }
+  });
+  return out;
 }
 
 /** The topics the app starts with. Each one can be edited. */
@@ -48,9 +89,11 @@ export interface TopicsState {
   loaded: boolean;
   topics: Topic[];
   run: { id?: string; query?: string; found: number; done: number; total: number; error?: string };
+  /** "Find more like these" in progress. */
+  learn: { id?: string; step?: 'looking' | 'learning'; error?: string; note?: string };
   v: number;
 }
-const state: TopicsState = { loaded: false, topics: [], run: { found: 0, done: 0, total: 0 }, v: 0 };
+const state: TopicsState = { loaded: false, topics: [], run: { found: 0, done: 0, total: 0 }, learn: {}, v: 0 };
 const listeners = new Set<() => void>();
 let version = 0;
 const notify = () => { state.v = ++version; listeners.forEach((f) => f()); };
@@ -98,6 +141,40 @@ export async function saveTopic(name: string, queries: string[], keys: string[] 
   await put(t);
   return t;
 }
+
+/** Marks one photo as belonging to a topic (yes), not belonging (no), or neither (null). */
+export async function markTopic(id: string, itemId: string, mark: 'yes' | 'no' | null) {
+  await load();
+  const t = state.topics.find((x) => x.id === id);
+  if (!t) return;
+  const yes = (t.yes ?? []).filter((x) => x !== itemId), no = (t.no ?? []).filter((x) => x !== itemId);
+  if (mark === 'yes') yes.push(itemId);
+  if (mark === 'no') no.push(itemId);
+  await put({ ...t, yes, no });
+}
+
+/** Changes how sure a learned match must be, or whether it must also be in Google's results. */
+export async function tuneTopic(id: string, change: Pick<Topic, 'sure'> | Pick<Topic, 'onlyGoogle'>) {
+  const t = state.topics.find((x) => x.id === id);
+  if (t) await put({ ...t, ...change });
+}
+
+/** Keeps what learning found. */
+export async function saveLearned(id: string, found: string[], foundP: number[], from: string) {
+  const t = state.topics.find((x) => x.id === id);
+  if (t) await put({ ...t, found, foundP, learnedFrom: from, learnedAt: new Date().toISOString() });
+}
+
+/** Forgets a topic's marks and what was learned from them. Google's results stay. */
+export async function clearLearning(id: string) {
+  const t = state.topics.find((x) => x.id === id);
+  if (!t) return;
+  const rest: Topic = { ...t };
+  for (const k of ['yes', 'no', 'found', 'foundP', 'learnedAt', 'learnedFrom', 'sure', 'onlyGoogle'] as const) delete rest[k];
+  await put(rest);
+}
+
+export function setLearnState(l: TopicsState['learn']) { state.learn = l; notify(); }
 
 /** New searches for a topic. What was found stays until it is searched again. */
 export async function editTopic(id: string, name: string, queries: string[]) {
@@ -163,6 +240,6 @@ export async function searchOnce(query: string, onFound: (n: number) => void): P
 /** Topic names for each item, so the main search box finds "VIN" photos too. */
 export function topicsByItem(): Map<string, string[]> {
   const out = new Map<string, string[]>();
-  for (const t of state.topics) for (const k of t.keys) { const id = 'gp:' + k; const a = out.get(id); a ? a.push(t.name) : out.set(id, [t.name]); }
+  for (const t of state.topics) for (const id of members(t)) { const a = out.get(id); a ? a.push(t.name) : out.set(id, [t.name]); }
   return out;
 }

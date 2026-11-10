@@ -3,6 +3,7 @@ import { localFull } from '../local/thumbs';
 import { fmtDuration, fmtSize, thumbUrl, type Item } from '../lib/model';
 import { details, type GpDetails } from '../gphotos/api';
 import { GpPicture } from './Grid';
+import { TopicMarks } from './Search';
 
 /** A Google Photos video plays from Google's own link; if the browser can't play it, the picture is shown. */
 function GpVideo({ it }: { it: Item }) {
@@ -73,6 +74,7 @@ export function Viewer({ list, index, setIndex, pathOf, onClose }: { list: Item[
           {more?.description && <><dt>Description</dt><dd>{more.description}</dd></>}
           <dt>Type</dt><dd>{it.kind}</dd>
         </dl>
+        <TopicMarks it={it} />
         {it.gp && !more && <div style={{ color: '#8d97a8' }}>Reading more details from Google Photos…</div>}
         {it.link && <a href={it.link} target="_blank" rel="noopener">{it.gp ? 'Open in Google Photos ↗' : 'Open in Google Drive ↗'}</a>}
       </aside>
