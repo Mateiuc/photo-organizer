@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Item } from '../lib/model';
 import { GROUP_BY_ID, GROUPS, SIDES, type Side } from '../sort/groups';
-import { checkPhoto, clearChecks, fixGroup, fresh, needsSort, placeAll, retryUnreadable, sortable, sortPhotos, stopSorting, useSort } from '../sort/store';
+import { NEEDS_SIGN_IN, signIn } from '../drive/api';
+import { checkPhoto, clearChecks, fixGroup, fresh, inDrive, needsSort, placeAll, retryUnreadable, sortable, sortPhotos, stopSorting, useSort } from '../sort/store';
 import { Thumb } from './Grid';
 
 const sideOf = (g: number) => GROUPS[g].side;
@@ -65,10 +66,21 @@ function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; w
 export function CleanUp({ items, all, onOpen }: { items: Item[]; all: Item[]; onOpen: (list: Item[], i: number) => void }) {
   const st = useSort();
   const photos = useMemo(() => all.filter(sortable), [all]);
-  const left = useMemo(() => photos.filter((it) => needsSort(it, st.recs.get(it.id))).length, [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
+  const todo = useMemo(() => photos.filter((it) => needsSort(it, st.recs.get(it.id))), [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
+  const left = todo.length;
+  const driveLeft = useMemo(() => todo.filter(inDrive).length, [todo]);
   const unreadable = useMemo(() => photos.filter((it) => st.recs.get(it.id)?.x).length, [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
   const sortedN = useMemo(() => photos.filter((it) => fresh(st.recs.get(it.id))).length, [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
   const r = st.run;
+  // Drive photos need the Google sign-in: ask for it on the click (a sign-in window is only allowed right after one).
+  const [signErr, setSignErr] = useState('');
+  const sort = async (signInFirst: boolean) => {
+    setSignErr('');
+    if (signInFirst || driveLeft) {
+      try { await signIn(); } catch (e) { if (signInFirst) { setSignErr((e as Error).message); return; } }
+    }
+    sortPhotos(all);
+  };
 
   // Groups are worked out when the page opens, when sorting stops, and when you ask it to learn.
   const placedFor = useRef('');
@@ -137,13 +149,19 @@ export function CleanUp({ items, all, onOpen }: { items: Item[]; all: Item[]; on
           </>
         ) : (
           <div className="row">
-            {left > 0 && <button className="btn primary" onClick={() => sortPhotos(all)}>{sortedN ? `Sort ${left.toLocaleString()} more photos` : `Sort ${left.toLocaleString()} photos`}</button>}
+            {left > 0 && <button className="btn primary" onClick={() => sort(false)}>{sortedN ? `Sort ${left.toLocaleString()} more photos` : `Sort ${left.toLocaleString()} photos`}</button>}
             {left > 0 && <span className="muted">{sortedN ? `${sortedN.toLocaleString()} sorted so far.` : 'The photos go in a mixed order, so after a few minutes you can already check the groups. You can pause and carry on later.'}</span>}
             {left === 0 && <span className="muted">All {photos.length.toLocaleString()} photos are sorted.{st.scoring ? ' Working out the groups…' : ''}</span>}
             {unreadable > 0 && <span className="muted">{unreadable.toLocaleString()} couldn't be read (often HEIC or RAW). <button className="link" onClick={() => retryUnreadable()}>Try them again</button></span>}
           </div>
         )}
-        {r.error && <p className="notice" style={{ margin: 0 }}>{r.error}</p>}
+        {r.error && !r.running && (r.error === NEEDS_SIGN_IN
+          ? <div className="notice row" style={{ margin: 0 }}>
+              <span>Your Google sign-in has expired{driveLeft ? `, so ${driveLeft.toLocaleString()} photos from Google Drive are waiting` : ''}. Sign in again to continue.</span>
+              <button className="btn primary" onClick={() => sort(true)}>Sign in again</button>
+            </div>
+          : <p className="notice" style={{ margin: 0 }}>{r.error}</p>)}
+        {signErr && <p className="notice" style={{ margin: 0 }}>{signErr}</p>}
       </div>
 
       {st.placed.size > 0 && (

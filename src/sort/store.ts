@@ -182,7 +182,9 @@ async function getBank(): Promise<Bank> {
 // ---------- sorting ----------
 let stopFlag = false;
 export function stopSorting() { stopFlag = true; }
-const FATAL = [NEEDS_SIGN_IN, NO_HELPER, NOT_SIGNED_IN, RELOAD];
+const FATAL = [NO_HELPER, NOT_SIGNED_IN, RELOAD];
+/** A photo kept in Google Drive (it needs the Google sign-in, which runs out after about an hour). */
+export const inDrive = (it: Item) => !it.local && !it.gp;
 const SIZE = 336; // the AI looks at 224 × 224, after the shorter side is made 224
 
 /** A number from a photo's id, the same every time: sorting in this order mixes all years and places. */
@@ -221,10 +223,11 @@ export async function sortPhotos(items: Item[]) {
     // Pictures are fetched up to 6 at once; each AI worker looks at one at a time.
     type Got = { it: Item; bmp?: ImageBitmap; err?: unknown };
     const queue: Promise<Got>[] = [];
-    let next = 0, last = Date.now();
+    let next = 0, last = Date.now(), signInLost = false;
     const fill = () => {
       while (queue.length < 6 && next < todo.length && !stopFlag) {
         const it = todo[next++];
+        if (signInLost && inDrive(it)) continue; // left for after you sign in again
         queue.push(loadPicture(it, { size: SIZE, fit: 'long', quality: 'high' }).then((bmp) => ({ it, bmp }), (err) => ({ it, err })));
       }
     };
@@ -248,10 +251,12 @@ export async function sortPhotos(items: Item[]) {
     const idle = [...ws];
     let wake: (() => void) | null = null;
     let failed: unknown;
+    // When the Google sign-in runs out, the Drive photos wait and the others carry on.
     while (queue.length) {
       const { it, bmp, err } = await queue.shift()!;
       if (stopFlag || failed) { bmp?.close(); continue; }
       fill();
+      if (err && (err as Error).message === NEEDS_SIGN_IN) { signInLost = true; continue; }
       if (err && FATAL.includes((err as Error).message)) throw err; // nothing can be read: stop
       while (!idle.length) await new Promise<void>((r) => { wake = r; });
       const cw = idle.shift()!;
@@ -262,6 +267,7 @@ export async function sortPhotos(items: Item[]) {
     }
     await Promise.all(running);
     if (failed) throw failed;
+    if (signInLost) state.run.error = NEEDS_SIGN_IN;
   } catch (e) {
     state.run.error = (e as Error).message || String(e);
   } finally {
