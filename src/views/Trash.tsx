@@ -75,7 +75,7 @@ export function TrashConfirm({ job, demo, helper, localName, localReady, localWr
         <ul className="where">
           {gp.length > 0 && <li><b>{things(gp)} from Google Photos</b> {go(gp)} to Google Photos' Trash. You can restore {them(gp)} from there for 60 days; after that Google deletes {them(gp)}. While in the Trash, {gp.length === 1 ? 'it disappears' : 'they disappear'} from Google Photos on your phone too, and from albums.</li>}
           {drive.length > 0 && <li><b>{things(drive)} from Google Drive</b> {go(drive)} to Drive's trash. You can restore {them(drive)} from there for 30 days.</li>}
-          {local.length > 0 && <li><b>{things(local)} from the folder “{localName ?? 'on this computer'}”</b> {go(local)} into the <code>_Trash</code> folder inside it, in the same sub-folders. Nothing is deleted from your computer: delete that folder yourself when you're sure.</li>}
+          {local.length > 0 && <li><b>{things(local)} from the folder “{localName ?? 'on this computer'}”</b> {go(local)} into the <code>_Trash</code> folder inside it, in the same sub-folders (where the top can't hold a folder, like a Google Drive G: drive, inside its first folder, such as My Drive). Nothing is deleted from your computer: delete that folder yourself when you're sure.</li>}
         </ul>
         <p className="muted" style={{ margin: 0 }}>Nothing is deleted for good, and right after moving you can Undo.</p>
         {oldHelper && <UpdateHelper have={helper} need={TRASH_VERSION} what="Move to trash in Google Photos" />}

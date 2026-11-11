@@ -191,42 +191,76 @@ export async function fingerprint(id: string): Promise<string | undefined> {
   return [...new Uint8Array(h).slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+const errText = (e: unknown) => (e as Error)?.message || String(e);
+const hasEntry = (d: Dir, name: string) => d.getFileHandle(name).then(() => true, () => false);
+async function walkTo(from: Dir, path: string[], create: boolean): Promise<Dir> {
+  let d = from;
+  for (const part of path) d = await d.getDirectoryHandle(part, { create });
+  return d;
+}
+/**
+ * Where a file goes in the trash, in order of preference: _Trash in the chosen folder, keeping the file's sub-folders;
+ * or, when no folder can be made at the top (like the top of a Google Drive "G:" drive, which only holds "My Drive"),
+ * _Trash inside its first sub-folder ("My Drive/_Trash/…").
+ */
+function trashPaths(item: Item): string[][] {
+  const below = item.id.slice('local:'.length).split('/').slice(1, -1);
+  return below.length ? [[TRASH, ...below], [below[0], TRASH, ...below.slice(1)]] : [[TRASH]];
+}
+
 /** Moves a file into _Trash inside the chosen folder, keeping its folder path, so it can be checked or put back. */
 export async function moveToTrash(item: Item): Promise<void> {
   if (!root) throw new Error('Open the folder again first (Drive & scan, then Scan).');
+  const top = root;
   const h = files.get(item.id);
   const parent = item.folderId ? dirs.get(item.folderId) : undefined;
   if (!h || h instanceof File || !parent) throw new Error(`Can't reach ${item.name}. Scan the folder again.`);
-  if (!(await askAccess(root, true))) throw new Error('The app needs permission to change files in this folder.');
-  // _Trash/<same folders as the original>
-  let dest = await root.getDirectoryHandle(TRASH, { create: true });
-  for (const part of item.id.slice('local:'.length).split('/').slice(1, -1)) dest = await dest.getDirectoryHandle(part, { create: true });
+  if (!(await askAccess(top, true))) throw new Error('The app needs permission to change files in this folder.');
+  let dest: Dir | undefined;
+  let why: unknown;
+  for (const path of trashPaths(item)) {
+    try { dest = await walkTo(top, path, true); break; } catch (e) { why = e; }
+  }
+  if (!dest) throw new Error(`Couldn't make a ${TRASH} folder in “${top.name}” for ${item.name}: ${errText(why)}`);
   const fh = h as any;
   if (typeof fh.move === 'function') {
-    try { await fh.move(dest); files.delete(item.id); return; } catch { /* fall back to copy + delete */ }
+    try { await fh.move(dest); files.delete(item.id); return; } catch {
+      // Some drives (like Google Drive's G:) finish the move but still report an error: check before copying.
+      if ((await hasEntry(dest, item.name)) && !(await hasEntry(parent, item.name))) { files.delete(item.id); return; }
+    }
   }
-  const src = await h.getFile();
-  const out = await dest.getFileHandle(item.name, { create: true });
-  const w = await (out as any).createWritable();
-  await src.stream().pipeTo(w);
-  await parent.removeEntry(item.name);
+  try {
+    const src = await h.getFile();
+    const out = await dest.getFileHandle(item.name, { create: true });
+    const w = await (out as any).createWritable();
+    await src.stream().pipeTo(w);
+    await parent.removeEntry(item.name);
+  } catch (e) {
+    throw new Error(`Couldn't move ${item.name} into ${TRASH}: ${errText(e)}`);
+  }
   files.delete(item.id);
 }
 
 /** Puts a file moved by moveToTrash back where it was (Undo). */
 export async function restoreFromTrash(item: Item): Promise<void> {
   if (!root) throw new Error('Open the folder again first (Choose photos).');
+  const top = root;
   const parent = item.folderId ? dirs.get(item.folderId) : undefined;
   if (!parent) throw new Error(`Can't find the folder of ${item.name}. Scan the folder again.`);
-  if (!(await askAccess(root, true))) throw new Error('The app needs permission to change files in this folder.');
-  let from = await root.getDirectoryHandle(TRASH);
-  for (const part of item.id.slice('local:'.length).split('/').slice(1, -1)) from = await from.getDirectoryHandle(part);
-  const h = await from.getFileHandle(item.name);
-  const taken = await parent.getFileHandle(item.name).then(() => true, () => false);
+  if (!(await askAccess(top, true))) throw new Error('The app needs permission to change files in this folder.');
+  let from: Dir | undefined;
+  let h: FileSystemFileHandle | undefined;
+  for (const path of trashPaths(item)) {
+    try { const d = await walkTo(top, path, false); h = await d.getFileHandle(item.name); from = d; break; } catch { /* not here */ }
+  }
+  if (!from || !h) throw new Error(`Couldn't find ${item.name} in ${TRASH}.`);
+  const taken = await hasEntry(parent, item.name);
   if (taken) throw new Error(`There is already a file called ${item.name} in its folder, so it was left in ${TRASH}.`);
   const fh = h as any;
   if (typeof fh.move === 'function') {
-    try { await fh.move(parent); files.set(item.id, h); return; } catch { /* fall back to copy + delete */ }
+    try { await fh.move(parent); files.set(item.id, h); return; } catch {
+      if ((await hasEntry(parent, item.name)) && !(await hasEntry(from, item.name))) { files.set(item.id, await parent.getFileHandle(item.name)); return; }
+    }
   }
   const out = await parent.getFileHandle(item.name, { create: true });
   const w = await (out as any).createWritable();
