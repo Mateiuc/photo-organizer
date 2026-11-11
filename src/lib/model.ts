@@ -199,12 +199,20 @@ export function exactDuplicates(items: Item[]): Item[][] {
   return [...by.values()].filter((g) => g.length > 1).sort((a, b) => b[0].size * (b.length - 1) - a[0].size * (a.length - 1));
 }
 
+/**
+ * Whether the date surely came from the camera. Google Photos doesn't say where its date came from: the app guesses
+ * from how close it is to the upload time, which is wrong both ways (a phone that backs up at once looks like it had
+ * no camera date; a WhatsApp copy looks like it had one). So for Google Photos the date doesn't count as camera data.
+ */
+const cameraDate = (x: Item) => x.takenFrom === 'camera' && !x.gp;
 /** How much of the camera's information a file still has. Copies sent through chat apps or re-saved often lose it. */
 export function metaScore(x: Item): number {
-  return (x.takenFrom === 'camera' ? 8 : 0) + (x.lat != null ? 4 : 0) + (x.camera ? 2 : 0) + (x.width ? 1 : 0);
+  return (cameraDate(x) ? 8 : 0) + (x.lat != null ? 4 : 0) + (x.camera ? 2 : 0) + (x.width ? 1 : 0);
 }
 /** Videos rarely carry camera data that Drive or the browser can read, so they always count as having it. */
-export const hasCameraData = (x: Item) => x.kind === 'video' || x.takenFrom === 'camera' || !!x.camera;
+export const hasCameraData = (x: Item) => x.kind === 'video' || cameraDate(x) || x.lat != null || !!x.camera;
+/** Sent through WhatsApp: by its folder, or by its name (IMG-20260925-WA0018.jpg). */
+const viaWhatsApp = (x: Item, pathOf: (folderId?: string) => string) => (/whatsapp/i.test(pathOf(x.folderId)) || /-WA\d{4}\b/i.test(x.name) ? 1 : 0);
 
 /** 1 when the file name looks like a copy: "photo (1).jpg", "photo - Copy.jpg", "photo copie.jpg", "photo~2.jpg". */
 export function copyMark(name: string): number {
@@ -227,7 +235,7 @@ export function misplaced(x: Item, pathOf: (folderId?: string) => string): numbe
 
 /** Which copy to keep, in order: most camera information, in a folder that matches its date, a name that isn't a copy, not WhatsApp, in a folder named for its month, the biggest file, the most specific folder. */
 export function pickKeeper(group: Item[], pathOf: (folderId?: string) => string): Item {
-  const wa = (x: Item) => (/whatsapp/i.test(pathOf(x.folderId)) ? 1 : 0);
+  const wa = (x: Item) => viaWhatsApp(x, pathOf);
   const month = (x: Item) => {
     const m = x.takenAt?.slice(0, 7);
     return m && pathOf(x.folderId).includes(m) ? 0 : 1;

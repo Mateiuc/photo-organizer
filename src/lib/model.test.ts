@@ -97,6 +97,24 @@ describe('copies that lost camera data', () => {
   });
 });
 
+describe('copies of the same photo in Google Photos', () => {
+  const p = () => 'Google Photos';
+  const gp = { key: 'k', dedup: 'd' };
+  // The phone uploaded the original within a minute, so its date looks like an upload date; WhatsApp copies don't.
+  const orig = base({ id: 'orig', gp, name: 'IMG_20260721_220047.jpg', takenFrom: 'upload', lat: 42.23, lon: -83.74, width: 2268, height: 4032, size: 2.5e6 });
+  const wa1 = base({ id: 'wa1', gp, name: 'IMG-20260925-WA0018.jpg', takenFrom: 'camera', width: 900, height: 1600, size: 312e3 });
+  const wa2 = base({ id: 'wa2', gp, name: 'IMG-20260925-WA0017.jpg', takenFrom: 'camera', width: 720, height: 1280, size: 221e3 });
+  it('keeps the original with its place, not a WhatsApp copy', () => {
+    expect(pickSame([wa1, orig, wa2], p).id).toBe('orig');
+    expect(worseReason(wa1, orig, p)).toBe('lost camera data');
+  });
+  it('without a place, keeps the biggest picture', () => {
+    const bare = { ...orig, lat: undefined, lon: undefined };
+    expect(pickSame([wa1, bare, wa2], p).id).toBe('orig');
+    expect(lesserCopy(wa1, bare)).toBe('smaller copy');
+  });
+});
+
 describe('copy names and wrong folders', () => {
   it('spots copy names', () => {
     expect(['a (1).jpg', 'a - Copy.jpg', 'a copie.jpg', 'a~2.jpg', 'Copy of a.jpg'].map(copyMark)).toEqual([1, 1, 1, 1, 1]);

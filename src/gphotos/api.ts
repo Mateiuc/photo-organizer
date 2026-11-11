@@ -161,8 +161,14 @@ export function gpToItem(g: GpListed, info?: GpInfo, old?: Item): Item {
   const video = g.duration != null;
   const mime = mimeFromName(name) || (video ? 'video/mp4' : 'image/jpeg');
   const kind = video ? 'video' : kindOf(name, mime.startsWith('video/') ? 'image/jpeg' : mime) ?? 'photo';
-  // Google Photos uses the camera's date when the file has one, otherwise the upload time.
-  const fromCamera = g.timestamp != null && (g.created == null || Math.abs(g.timestamp - g.created) > 60_000);
+  // Google Photos uses the camera's date when the file has one, otherwise the upload time. A date far from the upload
+  // time came from the file; so did one that matches the time in the name (IMG_20260721_220047), or a photo with a
+  // place (it kept its camera data), even when the phone uploaded it within a minute.
+  const takenAt = g.timestamp != null ? localIso(g.timestamp, g.tz) : undefined;
+  const t = name.match(/(20\d\d)[_\-.]?(\d\d)[_\-.]?(\d\d)[ _\-T.]+(\d\d)[_\-.:]?(\d\d)[_\-.:]?(\d\d)/);
+  const named = t ? Date.parse(`${t[1]}-${t[2]}-${t[3]}T${t[4]}:${t[5]}:${t[6]}Z`) : NaN;
+  const nameMatches = !!takenAt && Math.abs(named - Date.parse(takenAt + 'Z')) <= 120_000;
+  const fromCamera = g.timestamp != null && (g.created == null || Math.abs(g.timestamp - g.created) > 60_000 || g.lat != null || nameMatches);
   return {
     id: 'gp:' + g.mediaKey,
     name,
@@ -170,7 +176,7 @@ export function gpToItem(g: GpListed, info?: GpInfo, old?: Item): Item {
     mime,
     size: info?.size ?? old?.size ?? 0,
     folderId: GP_ROOT.id,
-    takenAt: g.timestamp != null ? localIso(g.timestamp, g.tz) : undefined,
+    takenAt,
     takenFrom: fromCamera ? 'camera' : 'upload',
     width: g.width,
     height: g.height,

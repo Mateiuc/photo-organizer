@@ -45,6 +45,14 @@ describe('Google Photos answers', () => {
     expect(it.gp?.archived).toBe(true);
   });
 
+  it('a phone that uploads within a minute still has a camera date when the name has the same time, or it has a place', () => {
+    const listed = parseListed(video)!; // taken 2021-07-04 12:00:00, uploaded half a second later
+    const still = { ...listed, duration: undefined };
+    expect(gpToItem(still, { name: 'IMG_20210704_120000.jpg', size: 9e6 }).takenFrom).toBe('camera');
+    expect(gpToItem(still, { name: 'IMG-20210704-WA0001.jpg', size: 9e6 }).takenFrom).toBe('upload');
+    expect(gpToItem({ ...still, lat: 42.2, lon: -83.7 }, { name: 'photo.jpg', size: 9e6 }).takenFrom).toBe('camera');
+  });
+
   it('keeps what was learned before when details are not read again', () => {
     const first = gpToItem(parseListed(photo)!, { name: 'a.jpg', size: 10 });
     const again = gpToItem(parseListed(photo)!, undefined, { ...first, gp: { ...first.gp!, albums: ['gp:a:X'] } });
