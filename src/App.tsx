@@ -18,7 +18,7 @@ import { SelectBar, TrashConfirm, UndoBar, type TrashJob, type UndoState } from 
 import { Setup } from './views/Setup';
 import { Viewer } from './views/Viewer';
 import { allowAgain, startBackup, useBackup } from './lib/backup';
-import { when } from './views/Backup';
+import { ShrunkNotice, when } from './views/Backup';
 import { useSimilar } from './pictures/groups';
 import { Search } from './views/Search';
 import { CleanUp } from './views/CleanUp';
@@ -359,8 +359,8 @@ export default function App() {
         <div className="grow" />
         {nav('setup', 'Choose photos')}
         {!DEMO && bk.supported && (
-          <button className={`who bk ${!bk.folder || bk.needsPermission || bk.error ? 'warn' : ''}`} onClick={() => setView('setup')} title="Backup of your library, faces and names">
-            {!bk.folder ? '⚠ Backup is off' : bk.needsPermission ? '⚠ Backup paused' : bk.error ? '⚠ Backup failed' : bk.saving ? 'Backup: saving…' : bk.savedAt ? `Backup ✓ ${when(bk.savedAt)}` : 'Backup: not saved yet'}
+          <button className={`who bk ${!bk.folder || bk.needsPermission || bk.error || bk.shrunk ? 'warn' : ''}`} onClick={() => setView('setup')} title="Backup of your library, faces and names">
+            {!bk.folder ? '⚠ Backup is off' : bk.needsPermission ? '⚠ Backup paused' : bk.shrunk ? '⚠ Backup: waiting for you' : bk.error ? '⚠ Backup failed' : bk.saving ? 'Backup: saving…' : bk.savedAt ? `Backup ✓ ${when(bk.savedAt)}` : 'Backup: not saved yet'}
           </button>
         )}
         <div className="who">{DEMO ? 'Sample photos' : [isLocal ? `Folder: ${meta.localName ?? ''}` : meta.source === 'drive' ? (signedIn ? 'Connected to Drive' : 'Drive (not connected)') : '', gpCount ? 'Google Photos' : ''].filter(Boolean).join(' · ') || 'Not connected'}</div>
@@ -396,6 +396,7 @@ export default function App() {
             {error && (error === NEEDS_SIGN_IN
               ? <div className="notice row" style={{ marginBottom: 12 }}><span>{error}</span><button className="btn primary" onClick={() => signIn().then(() => { setSignedIn(true); setError(''); }, (e) => setError((e as Error).message))}>Sign in again</button></div>
               : <p className="notice">{error}</p>)}
+            {view !== 'setup' && <ShrunkNotice onError={setError} style={{ marginBottom: 12 }} />}
             {bk.needsPermission && <div className="notice row" style={{ marginBottom: 12 }}><span>Backup paused: Chrome needs your OK to keep saving to “Photo Organizer backup”.</span><button className="btn primary" onClick={() => allowAgain()}>Allow saving</button></div>}
             {needsReopen && view !== 'setup' && <div className="notice row" style={{ marginBottom: 12 }}><span>To show the pictures, the browser needs your OK to open “{meta.localName}” again.</span><button className="btn primary" onClick={reopen}>Open folder</button></div>}
             {view === 'photos' && (items.length ? <MonthGrid items={shown} onOpen={open} onBroken={onBroken} /> : <div className="panel"><h2>No photos yet</h2><p className="muted">Choose a folder with photos to get started.</p><div className="row"><button className="btn primary" onClick={() => setView('setup')}>Choose folder</button></div></div>)}

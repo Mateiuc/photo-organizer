@@ -15,7 +15,8 @@ import { useEffect, useState } from 'react';
 import { openDB } from 'idb';
 import { changes, markBackedUp, ready, replaceAll, subscribe, type StoredFace } from '../faces/people';
 import type { Person } from '../faces/cluster';
-import { libraryEvents, type Library } from './store';
+import { libraryEvents, type Library, type Meta } from './store';
+import type { Folder, Item } from './model';
 import { markPicsBackedUp, picChanges, picturesReady, replaceAllPics, subscribePictures, type PicRec } from '../pictures/store';
 import { replaceAllTopics, subscribeTopics, topicChanges, topicsReady, type Topic } from '../search/topics';
 import { markSortBackedUp, replaceAllSort, sortChanges, sortReady, subscribeSort, type Check, type SortRec } from '../sort/store';
@@ -33,12 +34,27 @@ export interface BackupStatus {
   needsPermission: boolean;
   unsaved: boolean;
   error?: string;
+  /** The photo list became much smaller than the backup's: it isn't saved over it until you say so. */
+  shrunk?: { saved: number; now: number };
 }
 
 const supported = typeof window !== 'undefined' && 'showDirectoryPicker' in window;
 const status: BackupStatus = { supported, saving: false, needsPermission: false, unsaved: false };
 const listeners = new Set<() => void>();
 const tell = () => listeners.forEach((f) => f());
+
+/** Much smaller: fewer than three quarters of the saved photos, and at least 500 fewer. */
+export const muchSmaller = (now: number, saved: number) => saved > 0 && now < saved * 0.75 && saved - now >= 500;
+let smallerOk = false;
+/** You said the smaller photo list is right (for example after deleting many photos): save it. */
+export async function saveSmaller() { smallerOk = true; status.shrunk = undefined; tell(); await save(true); }
+/** Puts the backup's photo list back in this browser (your photos aren't touched), then reopens the app. */
+export async function bringBackLibrary() {
+  if (!dir || !lib) return;
+  const data = await readJson<{ items: Item[]; folders: Folder[]; meta: Meta }>(dir, 'library.json');
+  await lib.replaceAll(data);
+  location.reload();
+}
 
 export function useBackup(): BackupStatus {
   const [, set] = useState(0);
@@ -270,11 +286,26 @@ export async function save(force = false): Promise<void> {
     if (topicChanges.n !== seenTopics || !hasFile || (force && anyFound)) {
       await writeJson(dir, 'topics.json', { v: 1, topics: ts.topics });
     }
-    // 3. The library, when it changed (and never an empty one over a full one).
+    // 3. The library, when it changed: never an empty one over a full one, and a much smaller one only after you say
+    // so (choosing another folder, or a Google Photos or Drive read that didn't finish, would otherwise drop most of it).
     let photos = prev?.photos ?? 0;
     if (libWasDirty || force || !files.includes('library.json')) {
       const d = await lib.load();
-      if (d.items.length || !prev?.photos) { await writeJson(dir, 'library.json', d); photos = d.items.length; }
+      const saved = prev?.photos ?? 0;
+      if (d.items.length && muchSmaller(d.items.length, saved) && !smallerOk && files.includes('library.json')) {
+        status.shrunk = { saved, now: d.items.length };
+        libDirty = true; // saved once you decide
+      } else if (d.items.length || !saved) {
+        if (smallerOk && files.includes('library.json')) {
+          // Keep the bigger list as a dated file too (the 3 newest are kept).
+          const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+          await writeJson(dir, `library-before-${stamp}.json`, await readJson(dir, 'library.json'));
+          const old = files.filter((n) => /^library-before-.+\.json$/.test(n)).sort();
+          for (const n of old.slice(0, Math.max(0, old.length - 2))) await dir.removeEntry(n).catch(() => {});
+        }
+        await writeJson(dir, 'library.json', d); photos = d.items.length;
+        smallerOk = false; status.shrunk = undefined;
+      }
     }
     const m: Manifest = { app: 'Photo Organizer', v: 1, savedAt: new Date().toISOString(), photos, faces: st.faces.size, people: st.people.size, named: [...st.people.values()].filter((p) => p.name).length, pictures: ps.recs.size, sorted: ss.recs.size, fixes: ss.fixes.size };
     await writeJson(dir, 'backup.json', m);

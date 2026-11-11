@@ -51,13 +51,13 @@ function MarkGrid({ items, t, sureOf, onOpen }: { items: Item[]; t: Topic; sureO
   );
 }
 
-function TopicCard({ t, n, google, missing, busy, gp, open, onOpen, onEdit }: { t: Topic; n: number; google: number; missing: number; busy: boolean; gp: boolean; open: boolean; onOpen: () => void; onEdit: () => void }) {
+function TopicCard({ t, n, away, google, missing, busy, gp, open, onOpen, onEdit }: { t: Topic; n: number; away: number; google: number; missing: number; busy: boolean; gp: boolean; open: boolean; onOpen: () => void; onEdit: () => void }) {
   const st = useTopics();
   const r = st.run;
   const mine = r.id === t.id;
   const marks = (t.yes?.length ?? 0) + (t.no?.length ?? 0);
   const status = t.learnedAt
-    ? `${n.toLocaleString()} photos · learned from ${t.yes?.length ?? 0} ✓ and ${t.no?.length ?? 0} ✗, ${when(t.learnedAt)}`
+    ? `${n.toLocaleString()} photos · learned from ${t.yes?.length ?? 0} ✓ and ${t.no?.length ?? 0} ✗, ${when(t.learnedAt)}${away ? ` · ${away.toLocaleString()} more found that aren't in the app now` : ''}`
     : t.at ? `${google.toLocaleString()} photos found by Google Photos' search, ${when(t.at)}${missing ? ` · ${missing.toLocaleString()} more not in the app yet` : ''}`
       : marks ? `${marks} marked so far` : gp && t.queries.length ? 'Not searched yet' : 'No photos marked yet';
   return (
@@ -132,9 +132,12 @@ function TopicView({ t, all, shownIds, byKey, gp, onOpen, onClose, onSetup }: { 
   const [slider, setSlider] = useState(Math.round(sure * 100));
   useEffect(() => setSlider(Math.round((t.sure ?? SURE) * 100)), [t.sure]);
   const sureOf = useMemo(() => new Map((t.found ?? []).map((id, i) => [id, t.foundP?.[i] ?? 0])), [t.found, t.foundP]);
-  const found = useMemo(() => ids(members({ ...t, sure: slider / 100 })), [t, slider, byId, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
-  const google = useMemo(() => ids(t.keys.map((k) => byKey.get(k)?.id ?? '')).sort((a, b) => (b.takenAt ?? '').localeCompare(a.takenAt ?? '')), [t.keys, byKey, byId, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
-  const marked = useMemo(() => ids([...(t.yes ?? []), ...(t.no ?? [])]), [t.yes, t.no, byId, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const foundIds = useMemo(() => members({ ...t, sure: slider / 100 }), [t, slider]);
+  const googleIds = useMemo(() => t.keys.map((k) => byKey.get(k)?.id ?? 'gp:' + k), [t.keys, byKey]);
+  const markIds = useMemo(() => [...(t.yes ?? []), ...(t.no ?? [])], [t.yes, t.no]);
+  const found = useMemo(() => ids(foundIds), [foundIds, byId, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const google = useMemo(() => ids(googleIds).sort((a, b) => (b.takenAt ?? '').localeCompare(a.takenAt ?? '')), [googleIds, byId, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
+  const marked = useMemo(() => ids(markIds), [markIds, byId, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
   const yes = t.yes?.length ?? 0, no = t.no?.length ?? 0;
   const learning = st.learn.id === t.id;
   const changed = !!t.learnedAt && t.learnedFrom !== marksSig(t);
@@ -143,6 +146,12 @@ function TopicView({ t, all, shownIds, byKey, gp, onOpen, onClose, onSetup }: { 
   const looked = useMemo(() => withFingerprint(canLook, pics.recs).length, [canLook, pics.v]); // eslint-disable-line react-hooks/exhaustive-deps
   const notLooked = canLook.length - looked;
   const list = tab === 'found' ? found : tab === 'google' ? google : marked;
+  // Photos of this tab that can't be shown: not in the app's list now, or hidden by the filters at the top.
+  const unseen = useMemo(() => {
+    let out = 0, hidden = 0;
+    for (const id of tab === 'found' ? foundIds : tab === 'google' ? googleIds : markIds) { if (!byId.has(id)) out++; else if (!shownIds.has(id)) hidden++; }
+    return { out, hidden };
+  }, [tab, foundIds, googleIds, markIds, byId, shownIds]);
   const step = st.learn.id === t.id ? st.learn.step : undefined;
   return (
     <>
@@ -188,7 +197,14 @@ function TopicView({ t, all, shownIds, byKey, gp, onOpen, onClose, onSetup }: { 
         <button className={`chip ${tab === 'marks' ? 'on' : ''}`} onClick={() => setTab('marks')}>Your marks · {marked.length.toLocaleString()}</button>
       </div>
       {tab === 'found' && <p className="muted small" style={{ margin: 0 }}>Best matches first. Your ✓ photos are included; your ✗ photos are left out.{changed ? ' Your marks changed since this was found: press Find again to use them.' : ''}</p>}
-      {tab === 'google' && t.keys.length > google.length && <p className="muted small" style={{ margin: 0 }}>{(t.keys.length - google.length).toLocaleString()} of Google's results aren't shown: they were added after the app last read your library, or the filters at the top hide them. <button className="link" onClick={onSetup}>Read Google Photos again</button></p>}
+      {unseen.out > 0 && (
+        <p className="notice" style={{ margin: 0 }}>
+          {unseen.out.toLocaleString()} {unseen.out === 1 ? "photo here isn't" : "photos here aren't"} in the app's photo list right now, so {unseen.out === 1 ? "it can't" : "they can't"} be shown.
+          {' '}This happens when another folder was chosen, when Google Photos or Drive hasn't been read since {unseen.out === 1 ? 'it was' : 'they were'} added, or when {unseen.out === 1 ? 'it was' : 'they were'} deleted.
+          {' '}Your marks are kept: <button className="link" onClick={onSetup}>read Google Photos or your Drive again</button> to see them.
+        </p>
+      )}
+      {unseen.hidden > 0 && <p className="muted small" style={{ margin: 0 }}>{unseen.hidden.toLocaleString()} more {unseen.hidden === 1 ? 'is' : 'are'} hidden by the filters at the top.</p>}
       {tab === 'marks' && !marked.length && <p className="muted" style={{ margin: 0 }}>{gp && t.keys.length ? 'Mark photos in the Google Photos search tab, or open any photo and mark it in the side panel.' : 'Open any photo (in Photos, Folders…) and mark it ✓ for this topic in the side panel.'}</p>}
       <MarkGrid items={list} t={t} sureOf={tab === 'found' ? sureOf : undefined} onOpen={onOpen} />
     </>
@@ -208,6 +224,7 @@ export function Search({ items, all, onOpen, onSetup }: { items: Item[]; all: It
   const byKey = useMemo(() => new Map(all.filter((x) => x.gp).map((x) => [x.gp!.key, x])), [all]);
   const gp = byKey.size > 0;
   const shownIds = useMemo(() => new Set(items.map((x) => x.id)), [items]);
+  const inApp = useMemo(() => new Set(all.map((x) => x.id)), [all]);
   const pick = (keys: string[]) => keys.map((k) => byKey.get(k)).filter((x): x is Item => !!x && shownIds.has(x.id));
   const missingOf = (keys: string[]) => keys.filter((k) => !byKey.has(k)).length;
   const running = !!st.run.id || freeBusy != null;
@@ -250,8 +267,11 @@ export function Search({ items, all, onOpen, onSetup }: { items: Item[]; all: It
         <>
           <div className="topics">
             {st.topics.map((t) => {
-              const n = t.learnedAt ? members(t).length : 0;
-              return <TopicCard key={t.id} t={t} n={n} google={pick(t.keys).length} missing={missingOf(t.keys)} busy={running} gp={gp} open={open === t.id} onOpen={() => setOpen(open === t.id ? null : t.id)} onEdit={() => setEditing(t.id)} />;
+              // Only photos in the app's list (and not hidden by the filters at the top) can be shown.
+              const mem = t.learnedAt ? members(t) : [];
+              const n = mem.filter((id) => shownIds.has(id)).length;
+              const away = mem.filter((id) => !inApp.has(id)).length;
+              return <TopicCard key={t.id} t={t} n={n} away={away} google={pick(t.keys).length} missing={missingOf(t.keys)} busy={running} gp={gp} open={open === t.id} onOpen={() => setOpen(open === t.id ? null : t.id)} onEdit={() => setEditing(t.id)} />;
             })}
           </div>
           <NewTopic onMade={(t) => setOpen(t.id)} />

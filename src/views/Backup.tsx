@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { allowAgain, BACKUP_FOLDER, chooseFolder, findBackup, save, useBackup, type Manifest } from '../lib/backup';
+import { allowAgain, BACKUP_FOLDER, bringBackLibrary, chooseFolder, findBackup, save, saveSmaller, useBackup, type Manifest } from '../lib/backup';
 
 export function when(iso?: string): string {
   if (!iso) return '';
@@ -7,6 +7,20 @@ export function when(iso?: string): string {
   return d.toDateString() === new Date().toDateString() ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
 }
 const what = (m: Manifest) => `${m.photos.toLocaleString()} photos, ${m.faces.toLocaleString()} faces, ${m.people.toLocaleString()} people (${m.named.toLocaleString()} named)${m.pictures ? `, ${m.pictures.toLocaleString()} pictures compared` : ''}`;
+
+/** The photo list became much smaller than the backup's: bring the saved list back, or say the smaller one is right. */
+export function ShrunkNotice({ onError, style }: { onError: (message: string) => void; style?: React.CSSProperties }) {
+  const b = useBackup();
+  const s = b.shrunk;
+  if (!s) return null;
+  return (
+    <div className="notice row" style={style}>
+      <span>The app now has {s.now.toLocaleString()} photos, but your backup has {s.saved.toLocaleString()}. This happens when another folder is chosen, or Google Photos or Drive wasn't read to the end. The backup keeps the bigger list until you decide. Your photos themselves aren't touched either way.</span>
+      <button className="btn primary" onClick={() => { if (confirm(`Bring back the backup's list of ${s.saved.toLocaleString()} photos? The app's current list of ${s.now.toLocaleString()} is replaced (no files are changed), and the app reopens.`)) bringBackLibrary().catch((e) => onError((e as Error).message)); }}>Bring back the {s.saved.toLocaleString()}</button>
+      <button className="btn" onClick={() => { if (confirm(`Save the list of ${s.now.toLocaleString()} photos in the backup? The bigger list is kept as a separate file too.`)) saveSmaller().catch((e) => onError((e as Error).message)); }}>The {s.now.toLocaleString()} are right: save them</button>
+    </div>
+  );
+}
 
 /** Where the safe copy goes, and restoring it. */
 export function BackupPanel({ demo }: { demo: boolean }) {
@@ -45,6 +59,7 @@ export function BackupPanel({ demo }: { demo: boolean }) {
           {b.saved && <span className="muted"> In the backup: {what(b.saved)}.</span>}
         </p>
       ) : <p className="notice" style={{ margin: 0 }}>No backup folder yet. Choose one so your work is never lost.</p>}
+      <ShrunkNotice onError={setErr} />
       {b.needsPermission && <div className="notice row"><span>Chrome needs your OK to keep saving the backup.</span><button className="btn primary" onClick={() => allowAgain().catch(fail)}>Allow saving</button></div>}
       {(b.error || err) && <p className="error">{err || b.error}</p>}
       {found && (
