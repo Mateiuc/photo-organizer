@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Item } from '../lib/model';
 import { GROUP_BY_ID, GROUPS, SIDES, type Side } from '../sort/groups';
-import { checkPhoto, clearChecks, fixGroup, needsSort, placeAll, retryUnreadable, sortable, sortPhotos, stopSorting, useSort } from '../sort/store';
+import { checkPhoto, clearChecks, fixGroup, fresh, needsSort, placeAll, retryUnreadable, sortable, sortPhotos, stopSorting, useSort } from '../sort/store';
 import { Thumb } from './Grid';
 
 const sideOf = (g: number) => GROUPS[g].side;
@@ -67,7 +67,7 @@ export function CleanUp({ items, all, onOpen }: { items: Item[]; all: Item[]; on
   const photos = useMemo(() => all.filter(sortable), [all]);
   const left = useMemo(() => photos.filter((it) => needsSort(it, st.recs.get(it.id))).length, [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
   const unreadable = useMemo(() => photos.filter((it) => st.recs.get(it.id)?.x).length, [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
-  const sortedN = useMemo(() => photos.filter((it) => st.recs.get(it.id)?.k).length, [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sortedN = useMemo(() => photos.filter((it) => fresh(st.recs.get(it.id))).length, [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
   const r = st.run;
 
   // Groups are worked out when the page opens, when sorting stops, and when you ask it to learn.
@@ -121,7 +121,7 @@ export function CleanUp({ items, all, onOpen }: { items: Item[]; all: Item[]; on
       <div className="panel">
         <p className="muted" style={{ margin: 0 }}>
           The app sorts your photos into groups with an AI that understands pictures and words together (CLIP, from OpenAI). It runs on this computer: no photo is sent anywhere.
-          The AI is downloaded once (about 150 MB) and the browser keeps it. <b>Nothing is deleted on this page</b>: it only sorts and shows, so you can check how good it is first.
+          The AI is downloaded once (about 600 MB) and the browser keeps it. <b>Nothing is deleted on this page</b>: it only sorts and shows, so you can check how good it is first.
         </p>
         {r.running ? (
           <>
@@ -138,7 +138,7 @@ export function CleanUp({ items, all, onOpen }: { items: Item[]; all: Item[]; on
         ) : (
           <div className="row">
             {left > 0 && <button className="btn primary" onClick={() => sortPhotos(all)}>{sortedN ? `Sort ${left.toLocaleString()} more photos` : `Sort ${left.toLocaleString()} photos`}</button>}
-            {left > 0 && <span className="muted">{sortedN ? `${sortedN.toLocaleString()} sorted so far.` : 'About 1 to 3 photos a second, depending on the computer. You can pause and carry on later.'}</span>}
+            {left > 0 && <span className="muted">{sortedN ? `${sortedN.toLocaleString()} sorted so far.` : 'The photos go in a mixed order, so after a few minutes you can already check the groups. You can pause and carry on later.'}</span>}
             {left === 0 && <span className="muted">All {photos.length.toLocaleString()} photos are sorted.{st.scoring ? ' Working out the groups…' : ''}</span>}
             {unreadable > 0 && <span className="muted">{unreadable.toLocaleString()} couldn't be read (often HEIC or RAW). <button className="link" onClick={() => retryUnreadable()}>Try them again</button></span>}
           </div>

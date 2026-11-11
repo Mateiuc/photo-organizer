@@ -100,9 +100,10 @@ const fromPicRow = (w: PicRow, b: number): PicRec => (w.x ? { id: w.i, x: 1, m: 
   id: w.i, h: new Uint32Array(unb64(w.h!).buffer), g: unb64(w.g!), e: new Int8Array(unb64(w.e!).buffer), sh: w.s, fl: w.f, ar: w.a, c: w.c, m: w.m, pw: w.W, ph: w.H, b,
 });
 
-interface SortRow { i: string; k?: string; x?: 1; m?: number }
-const sortRow = (r: SortRec): SortRow => (r.x ? { i: r.id, x: 1, m: r.m } : { i: r.id, k: b64(r.k!), m: r.m });
-const fromSortRow = (w: SortRow, b: number): SortRec => (w.x ? { id: w.i, x: 1, m: w.m, b } : { id: w.i, k: new Int8Array(unb64(w.k!).buffer), m: w.m, b });
+// v = which AI made the fingerprint (none = the first, compressed one; those are made again).
+interface SortRow { i: string; k?: string; x?: 1; m?: number; v?: number }
+const sortRow = (r: SortRec): SortRow => (r.x ? { i: r.id, x: 1, m: r.m } : { i: r.id, k: b64(r.k!), m: r.m, v: r.v });
+const fromSortRow = (w: SortRow, b: number): SortRec => (w.x ? { id: w.i, x: 1, m: w.m, b } : { id: w.i, k: new Int8Array(unb64(w.k!).buffer), m: w.m, b, v: w.v });
 interface CleanupFile { v: 1; fixes: [string, string][]; checks: [string, Check][] }
 
 interface FaceRow { k: string; i: string; d: string; x: StoredFace['box']; c: string }

@@ -10,10 +10,15 @@ import { loadPicture } from '../lib/picture';
 import { hasFile } from '../local/fs';
 import { quantize } from '../pictures/compare';
 import { ready as facesReady } from '../faces/people';
-import { CLIP_DIM, CLIP_MODEL, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, promptList, PROMPTS_VERSION, unitOf, type Bank, type Examples, type Placed } from './groups';
+import { CLIP_DIM, CLIP_DTYPE, CLIP_MODEL, FP_VERSION, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, promptList, PROMPTS_VERSION, unitOf, type Bank, type Examples, type Placed } from './groups';
 
-/** What the app keeps about one photo. `x` = the picture couldn't be read; `b` = which backup file holds it. */
-export interface SortRec { id: string; k?: Int8Array; x?: 1; m?: number; b?: number }
+/**
+ * What the app keeps about one photo. `x` = the picture couldn't be read; `b` = which backup file holds it; `v` = which
+ * AI made the fingerprint (see FP_VERSION; none = the first, compressed one).
+ */
+export interface SortRec { id: string; k?: Int8Array; x?: 1; m?: number; b?: number; v?: number }
+/** A fingerprint made by the AI in use now. Older ones are made again, and not used until then. */
+export const fresh = (r?: SortRec): r is SortRec & { k: Int8Array } => !!r?.k && r.v === FP_VERSION;
 /** A photo you checked: the group it was in, and whether that was right. */
 export interface Check { g: string; ok: boolean; at: number }
 
@@ -56,10 +61,27 @@ async function load() {
     fx.forEach(([id, g]) => state.fixes.set(id, g));
     const ck: [string, Check][] = (await d.get('kv', 'checks')) ?? [];
     ck.forEach(([id, c]) => state.checks.set(id, c));
+    if ((await d.get('kv', 'fp')) !== FP_VERSION) await changedAi(d);
     state.loaded = true;
     notify();
   })());
 }
+/**
+ * The app moved to another AI: your checks counted the old one's answers, so they start again (your fixes stay), and
+ * the old AI's files are let go from the browser.
+ */
+async function changedAi(d: IDBPDatabase) {
+  state.checks.clear();
+  await d.put('kv', [], 'checks');
+  await d.delete('kv', `bank:${CLIP_MODEL}:${PROMPTS_VERSION}`);
+  await d.put('kv', FP_VERSION, 'fp');
+  sortChanges.edits++;
+  try {
+    const c = await caches.open('transformers-cache');
+    for (const req of await c.keys()) if (req.url.includes(CLIP_MODEL) && /_quantized\.onnx/.test(req.url)) await c.delete(req);
+  } catch { /* no cache here: nothing to free */ }
+}
+
 export async function sortReady(): Promise<SortState> { await load(); return state; }
 
 export function useSort(): SortState {
@@ -75,7 +97,7 @@ export function useSort(): SortState {
 
 export const sortable = (it: Item) => it.kind === 'photo' || it.kind === 'raw' || it.kind === 'screenshot';
 /** Photos the AI still has to look at (screenshots don't need it: the file says what they are). */
-export const needsSort = (it: Item, r?: SortRec) => sortable(it) && it.kind !== 'screenshot' && (!r || (!!it.local && r.m !== it.mtime));
+export const needsSort = (it: Item, r?: SortRec) => sortable(it) && it.kind !== 'screenshot' && (!r || (!r.x && r.v !== FP_VERSION) || (!!it.local && r.m !== it.mtime));
 
 async function saveKv() {
   const d = await db();
@@ -104,7 +126,7 @@ function call<T>(cw: ClipWorker, msg: Record<string, unknown>, transfer: Transfe
   });
 }
 
-function startOne(text: boolean, onProgress?: (file: string, loaded: number, total: number) => void): Promise<ClipWorker> {
+function startOne(onProgress?: (file: string, loaded: number, total: number) => void): Promise<ClipWorker> {
   const w = new Worker(new URL('./clip.worker.ts', import.meta.url), { type: 'module' });
   return new Promise((resolve, reject) => {
     const on = (e: MessageEvent) => {
@@ -115,7 +137,7 @@ function startOne(text: boolean, onProgress?: (file: string, loaded: number, tot
     };
     w.addEventListener('message', on);
     w.addEventListener('error', (e) => { w.terminate(); reject(new Error(e.message || 'The AI couldn’t start in this browser.')); });
-    w.postMessage({ op: 'init', base: base(), model: CLIP_MODEL, text });
+    w.postMessage({ op: 'init', base: base(), model: CLIP_MODEL, dtype: CLIP_DTYPE });
   });
 }
 
@@ -124,16 +146,18 @@ function startWorkers(): Promise<ClipWorker[]> {
   if (workers.length) return Promise.resolve(workers);
   starting ??= (async () => {
     const files = new Map<string, [number, number]>();
-    const first = await startOne(true, (file, loaded, total) => {
+    const first = await startOne((file, loaded, total) => {
       files.set(file, [loaded, total]);
       let l = 0, t = 0;
       for (const [a, b] of files.values()) { l += a; t += b; }
       state.run.model = { loaded: l, total: t };
       notify();
     });
-    const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 2 : 2;
-    const extra = cores >= 6 ? 2 : cores >= 4 ? 1 : 0;
-    const more = await Promise.all(Array.from({ length: extra }, () => startOne(false).catch(() => null)));
+    // Each extra worker holds its own copy of the AI (about 350 MB of memory), so only on computers that have room.
+    const nav = typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }) : undefined;
+    const cores = nav?.hardwareConcurrency || 2, mem = nav?.deviceMemory ?? 8;
+    const extra = Math.min(cores >= 6 ? 2 : cores >= 4 ? 1 : 0, mem >= 8 ? 2 : mem >= 4 ? 1 : 0);
+    const more = await Promise.all(Array.from({ length: extra }, () => startOne().catch(() => null)));
     workers = [first, ...more.filter((x): x is ClipWorker => !!x)];
     return workers;
   })().finally(() => { starting = null; });
@@ -145,7 +169,7 @@ let bank: Bank | null = null;
 async function getBank(): Promise<Bank> {
   if (bank) return bank;
   const d = await db();
-  const key = `bank:${CLIP_MODEL}:${PROMPTS_VERSION}`;
+  const key = `bank:${CLIP_MODEL}:${CLIP_DTYPE}:${PROMPTS_VERSION}`;
   const saved: Float32Array | undefined = await d.get('kv', key);
   const prompts = promptList();
   if (saved && saved.length === prompts.length * CLIP_DIM) return (bank = makeBank(saved));
@@ -161,11 +185,21 @@ export function stopSorting() { stopFlag = true; }
 const FATAL = [NEEDS_SIGN_IN, NO_HELPER, NOT_SIGNED_IN, RELOAD];
 const SIZE = 336; // the AI looks at 224 × 224, after the shorter side is made 224
 
-/** Looks at every photo not looked at yet, newest first. Safe to stop and start again. */
+/** A number from a photo's id, the same every time: sorting in this order mixes all years and places. */
+function mix(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+/**
+ * Looks at every photo not looked at yet. Safe to stop and start again. The photos go in a mixed order (not newest
+ * first), so after a few minutes the groups already hold a fair sample of all your photos and can be checked.
+ */
 export async function sortPhotos(items: Item[]) {
   if (state.run.running) return;
   await load();
-  const todo = items.filter((it) => needsSort(it, state.recs.get(it.id)) && (!it.local || hasFile(it.id))).sort((a, b) => (b.takenAt ?? '').localeCompare(a.takenAt ?? ''));
+  const todo = items.filter((it) => needsSort(it, state.recs.get(it.id)) && (!it.local || hasFile(it.id))).map((it) => [mix(it.id), it] as const).sort((a, b) => a[0] - b[0]).map(([, it]) => it);
   stopFlag = false;
   state.run = { running: true, done: 0, total: todo.length, step: 'model' };
   notify();
@@ -197,7 +231,7 @@ export async function sortPhotos(items: Item[]) {
     const one = async (cw: ClipWorker, it: Item, bmp?: ImageBitmap) => {
       let rec: SortRec = { id: it.id, x: 1 };
       if (bmp) {
-        try { const { emb } = await call<{ emb: Float32Array }>(cw, { op: 'image', bmp }, [bmp]); rec = { id: it.id, k: quantize(emb) }; } catch (e) {
+        try { const { emb } = await call<{ emb: Float32Array }>(cw, { op: 'image', bmp }, [bmp]); rec = { id: it.id, k: quantize(emb), v: FP_VERSION }; } catch (e) {
           if (!workers.length) throw e; // the AI itself stopped, not just this picture
         }
       }
@@ -252,7 +286,7 @@ let scoreSeq = 0;
 /** Puts every photo in a group: the AI's scores (with your fixes as examples), then the sure signals. */
 export async function placeAll(items: Item[]) {
   await load();
-  const withK = items.filter((it) => sortable(it) && state.recs.get(it.id)?.k);
+  const withK = items.filter((it) => sortable(it) && fresh(state.recs.get(it.id)));
   if (!withK.length && !items.some((it) => it.kind === 'screenshot')) { state.placed = new Map(); notify(); return; }
   state.scoring = true; notify();
   try {
@@ -260,7 +294,7 @@ export async function placeAll(items: Item[]) {
     const k = new Int8Array(withK.length * CLIP_DIM);
     withK.forEach((it, i) => k.set(state.recs.get(it.id)!.k!, i * CLIP_DIM));
     // your newest fixes, as examples
-    const fixes = [...state.fixes].filter(([id]) => state.recs.get(id)?.k).slice(-LEARN.maxExamples);
+    const fixes = [...state.fixes].filter(([id]) => fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
     const ex: Examples = { emb: new Float32Array(fixes.length * CLIP_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
     fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * CLIP_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
     let ai: { g: Uint8Array; p: Float32Array } = { g: new Uint8Array(0), p: new Float32Array(0) };

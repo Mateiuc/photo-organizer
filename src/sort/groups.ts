@@ -9,6 +9,13 @@
 
 export const CLIP_DIM = 512;
 export const CLIP_MODEL = 'Xenova/clip-vit-base-patch32';
+/**
+ * The full-size AI (about 350 MB for pictures). The small compressed copy (q8, 90 MB) was tried first: its fingerprints
+ * were too far from the real ones, and clear photos of people ended up in the junk groups.
+ */
+export const CLIP_DTYPE = 'fp32' as const;
+/** Which AI made a fingerprint. Fingerprints from an older one are made again. 1 = the compressed copy. */
+export const FP_VERSION = 2;
 /** Change when the sentences change, so the sentence fingerprints are made again. */
 export const PROMPTS_VERSION = 1;
 
@@ -178,15 +185,20 @@ export function scoreAll(k: Int8Array, n: number, bank: Bank, ex?: Examples, dim
 export type Why = 'ai' | 'name' | 'face' | 'you';
 export interface Placed { g: number; p: number; why: Why }
 
+/** How sure the AI must be that a photo with a face is junk (an ID card, a document with a photo) to keep it there. */
+export const FACE_JUNK_SURE = 0.8;
+
 /**
  * The final group of one photo: your fix first; then a screenshot recognised from the file itself; then a photo with
- * a face goes to People, unless the AI sees a document, screenshot, label or screen (an ID card has a face too).
+ * a face goes to People, unless the AI is very sure it is a document, label, screen or scan-tool screen (an ID card
+ * has a face too).
  */
 export function place(ai: { g: number; p: number } | undefined, o: { fix?: number; screenshot?: boolean; face?: boolean }): Placed | undefined {
   if (o.fix != null) return { g: o.fix, p: 1, why: 'you' };
   if (o.screenshot) return { g: GROUP_BY_ID.get('shots')!, p: 1, why: 'name' };
   if (!ai) return undefined;
   const side = GROUPS[ai.g].side;
-  if (o.face && side !== 'junk' && side !== 'call' && GROUPS[ai.g].id !== 'people') return { g: GROUP_BY_ID.get('people')!, p: Math.max(ai.p, 0.9), why: 'face' };
+  const sureJunk = (side === 'junk' || side === 'call') && ai.p >= FACE_JUNK_SURE;
+  if (o.face && !sureJunk && GROUPS[ai.g].id !== 'people') return { g: GROUP_BY_ID.get('people')!, p: Math.max(side === 'keep' || side === 'other' ? ai.p : 0, 0.9), why: 'face' };
   return { g: ai.g, p: ai.p, why: 'ai' };
 }

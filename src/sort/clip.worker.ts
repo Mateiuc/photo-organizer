@@ -2,16 +2,20 @@
 // Hugging Face the first time and are kept by the browser afterwards; the AI runtime comes from this app's own site.
 import { AutoProcessor, AutoTokenizer, CLIPTextModelWithProjection, CLIPVisionModelWithProjection, env, RawImage } from '@huggingface/transformers';
 
+type Dtype = 'fp32' | 'q8';
 type In =
-  | { op: 'init'; base: string; model: string; text: boolean }
+  | { op: 'init'; base: string; model: string; dtype: Dtype }
   | { op: 'text'; id: number; prompts: string[] }
   | { op: 'image'; id: number; bmp: ImageBitmap };
 
 const post = (m: unknown, t?: Transferable[]) => (self as unknown as Worker).postMessage(m, t ?? []);
 let vision: Awaited<ReturnType<typeof CLIPVisionModelWithProjection.from_pretrained>> | null = null;
 let processor: Awaited<ReturnType<typeof AutoProcessor.from_pretrained>> | null = null;
-let textModel: Awaited<ReturnType<typeof CLIPTextModelWithProjection.from_pretrained>> | null = null;
-let tokenizer: Awaited<ReturnType<typeof AutoTokenizer.from_pretrained>> | null = null;
+let modelId = '';
+let dtype: Dtype = 'fp32';
+const progress_callback = (p: { status: string; file?: string; loaded?: number; total?: number }) => {
+  if (p.status === 'progress' && p.file) post({ op: 'progress', file: p.file, loaded: p.loaded ?? 0, total: p.total ?? 0 });
+};
 
 function unit(data: ArrayLike<number>, rows: number, dim: number): Float32Array {
   const out = new Float32Array(rows * dim);
@@ -42,24 +46,24 @@ self.onmessage = async (e: MessageEvent<In>) => {
       env.useBrowserCache = true;
       const onnx = env.backends.onnx as { wasm?: { wasmPaths?: string; numThreads?: number; proxy?: boolean } };
       if (onnx.wasm) { onnx.wasm.wasmPaths = m.base + 'ort/'; onnx.wasm.numThreads = 1; onnx.wasm.proxy = false; }
-      const progress_callback = (p: { status: string; file?: string; loaded?: number; total?: number }) => {
-        if (p.status === 'progress' && p.file) post({ op: 'progress', file: p.file, loaded: p.loaded ?? 0, total: p.total ?? 0 });
-      };
-      const opts = { dtype: 'q8' as const, device: 'wasm' as const, progress_callback };
+      modelId = m.model; dtype = m.dtype;
       processor = await AutoProcessor.from_pretrained(m.model, { progress_callback });
-      vision = await CLIPVisionModelWithProjection.from_pretrained(m.model, opts);
-      if (m.text) {
-        tokenizer = await AutoTokenizer.from_pretrained(m.model, { progress_callback });
-        textModel = await CLIPTextModelWithProjection.from_pretrained(m.model, opts);
-      }
+      vision = await CLIPVisionModelWithProjection.from_pretrained(m.model, { dtype, device: 'wasm', progress_callback });
       post({ op: 'ready' });
     } else if (m.op === 'text') {
-      if (!tokenizer || !textModel) throw new Error('The text part of the AI isn’t loaded');
-      const inputs = tokenizer(m.prompts, { padding: true, truncation: true });
-      const { text_embeds } = await textModel(inputs);
-      const [rows, dim] = text_embeds.dims as number[];
-      const emb = unit(text_embeds.data as Float32Array, rows, dim);
-      post({ id: m.id, emb, dim }, [emb.buffer]);
+      // The words part is needed only once, to make the sentence fingerprints (the app keeps them), so it is loaded
+      // here and let go straight after.
+      const tokenizer = await AutoTokenizer.from_pretrained(modelId, { progress_callback });
+      const textModel = await CLIPTextModelWithProjection.from_pretrained(modelId, { dtype, device: 'wasm', progress_callback });
+      try {
+        const inputs = tokenizer(m.prompts, { padding: true, truncation: true });
+        const { text_embeds } = await textModel(inputs);
+        const [rows, dim] = text_embeds.dims as number[];
+        const emb = unit(text_embeds.data as Float32Array, rows, dim);
+        post({ id: m.id, emb, dim }, [emb.buffer]);
+      } finally {
+        await textModel.dispose().catch(() => {});
+      }
     } else if (m.op === 'image') {
       if (!vision || !processor) throw new Error('The AI isn’t loaded');
       const raw = toRaw(m.bmp);

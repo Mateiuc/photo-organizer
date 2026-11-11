@@ -68,12 +68,13 @@ describe('clean-up groups', () => {
     expect([...sure.g].map((i) => GROUPS[i].id)).toEqual(['screens', 'people']);
   });
 
-  it('sure signals: your fix, a screenshot by its file, a face (but not on a document)', () => {
+  it('sure signals: your fix, a screenshot by its file, a face (but not on a document the AI is sure of)', () => {
     const docs = GROUP_BY_ID.get('docs')!, food = GROUP_BY_ID.get('food')!, people = GROUP_BY_ID.get('people')!, shots = GROUP_BY_ID.get('shots')!;
     expect(place({ g: docs, p: 0.7 }, { fix: food })).toEqual({ g: food, p: 1, why: 'you' });
     expect(place(undefined, { screenshot: true })).toEqual({ g: shots, p: 1, why: 'name' });
     expect(place({ g: food, p: 0.6 }, { face: true })).toEqual({ g: people, p: 0.9, why: 'face' });
-    expect(place({ g: docs, p: 0.6 }, { face: true })).toEqual({ g: docs, p: 0.6, why: 'ai' }); // an ID card has a face too
+    expect(place({ g: docs, p: 0.6 }, { face: true })).toEqual({ g: people, p: 0.9, why: 'face' }); // not sure it's a document: People
+    expect(place({ g: docs, p: 0.95 }, { face: true })).toEqual({ g: docs, p: 0.95, why: 'ai' }); // an ID card has a face too
     expect(place(undefined, {})).toBeUndefined();
   });
 });
