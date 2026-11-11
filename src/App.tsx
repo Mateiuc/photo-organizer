@@ -21,7 +21,7 @@ import { allowAgain, startBackup, useBackup } from './lib/backup';
 import { ShrunkNotice, when } from './views/Backup';
 import { useSimilar } from './pictures/groups';
 import { Search } from './views/Search';
-import { CleanUp } from './views/CleanUp';
+import { CleanUp, MoveToGroup } from './views/CleanUp';
 import { topicsByItem, useTopics } from './search/topics';
 
 type View = 'photos' | 'search' | 'places' | 'people' | 'folders' | 'duplicates' | 'cleanup' | 'setup';
@@ -414,7 +414,7 @@ export default function App() {
       {(selecting || undo) && (
         <div className="bottom">
           {undo && <UndoBar undo={undo} onUndo={runUndo} onClose={() => setUndo(null)} />}
-          <SelectBar exists={(id) => byId.has(id)} onTrash={askTrash} />
+          <SelectBar exists={(id) => byId.has(id)} onTrash={askTrash} extra={view === 'cleanup' ? (ids) => <MoveToGroup ids={ids} /> : undefined} />
         </div>
       )}
       {job && <TrashConfirm job={job} demo={DEMO} helper={helperVersion()} localName={meta.localName} localReady={isOpen()} localWritable={canWrite} onConfirm={runTrash} onCancel={() => setJob(null)} />}

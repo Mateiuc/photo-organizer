@@ -239,9 +239,9 @@ button.link { background: none; border: 0; padding: 0; font: inherit; color: var
 .side.keep { border-left: 4px solid var(--good); }
 .side.whatsapp { border-left: 4px solid #25d366; }
 .side.other { border-left: 4px solid var(--line); }
-.ctile { position: relative; display: grid; grid-template-rows: auto auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.ctile { position: relative; display: grid; grid-template-rows: auto auto; grid-template-columns: minmax(0, 1fr); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .ctile .tile { width: 100%; display: block; border-radius: 0; }
-.ctile .sure { position: absolute; left: 6px; top: 6px; font: 600 11px var(--f-mono); background: rgba(0,0,0,.6); color: #fff; padding: 2px 6px; border-radius: 4px; pointer-events: none; }
+.ctile .sure { position: absolute; right: 6px; top: 6px; font: 600 11px var(--f-mono); background: rgba(0,0,0,.6); color: #fff; padding: 2px 6px; border-radius: 4px; pointer-events: none; }
 .ctile .cbar { display: flex; gap: 4px; padding: 4px; }
 .ctile .gsel { flex: 1; min-width: 0; font: 12px var(--f-ui); padding: 3px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
 .ctile .ok { font: 600 12px var(--f-ui); padding: 3px 8px; border: 1px solid var(--good); color: var(--good); background: var(--panel); border-radius: 6px; cursor: pointer; white-space: nowrap; }

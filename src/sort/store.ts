@@ -39,11 +39,16 @@ export interface SortState {
   placed: Map<string, Placed>;
   /** How many fixes the last scoring learned from. */
   learnedFrom: number;
+  /**
+   * The fixes as they were when you last pressed "Learn from my fixes". Only these teach the AI, so groups don't shift
+   * by themselves after you move or delete photos. (Older data without it: all fixes count, as before.)
+   */
+  learned: Map<string, string>;
   scoring: boolean;
   run: { running: boolean; done: number; total: number; step?: 'model' | 'sorting'; model?: { loaded: number; total: number }; current?: string; error?: string; startedAt?: number };
   v: number;
 }
-const state: SortState = { loaded: false, recs: new Map(), fixes: new Map(), checks: new Map(), placed: new Map(), learnedFrom: 0, scoring: false, run: { running: false, done: 0, total: 0 }, v: 0 };
+const state: SortState = { loaded: false, recs: new Map(), fixes: new Map(), checks: new Map(), placed: new Map(), learnedFrom: 0, learned: new Map(), scoring: false, run: { running: false, done: 0, total: 0 }, v: 0 };
 const listeners = new Set<() => void>();
 let version = 0;
 const notify = () => { state.v = ++version; listeners.forEach((f) => f()); };
@@ -60,6 +65,9 @@ async function load() {
     all.forEach((r) => state.recs.set(r.id, r));
     const fx: [string, string][] = (await d.get('kv', 'fixes')) ?? [];
     fx.forEach(([id, g]) => state.fixes.set(id, g));
+    const ln: [string, string][] | undefined = await d.get('kv', 'learned');
+    state.learned = new Map(ln ?? fx);
+    if (!ln) await d.put('kv', fx, 'learned'); // from now on only "Learn from my fixes" adds to it
     const ck: [string, Check][] = (await d.get('kv', 'checks')) ?? [];
     ck.forEach(([id, c]) => state.checks.set(id, c));
     if ((await d.get('kv', 'fp')) !== FP_VERSION) await changedAi(d);
@@ -293,8 +301,12 @@ export async function retryUnreadable() {
 let scorer: Worker | null = null;
 let scoreSeq = 0;
 /** Puts every photo in a group: the AI's scores (with your fixes as examples), then the sure signals. */
-export async function placeAll(items: Item[], pathOf: (folderId?: string) => string = () => '') {
+export async function placeAll(items: Item[], pathOf: (folderId?: string) => string = () => '', learn = false) {
   await load();
+  if (learn) {
+    state.learned = new Map(state.fixes);
+    await (await db()).put('kv', [...state.learned], 'learned');
+  }
   const withK = items.filter((it) => sortable(it) && fresh(state.recs.get(it.id)));
   if (!withK.length && !state.fixes.size && !items.some((it) => it.kind === 'screenshot' || viaWhatsApp(it, pathOf))) { state.placed = new Map(); notify(); return; }
   state.scoring = true; notify();
@@ -302,8 +314,8 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
     const b = withK.length ? await getBank() : null;
     const k = new Int8Array(withK.length * CLIP_DIM);
     withK.forEach((it, i) => k.set(state.recs.get(it.id)!.k!, i * CLIP_DIM));
-    // your newest fixes, as examples
-    const fixes = [...state.fixes].filter(([id]) => fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
+    // your newest fixes that it was asked to learn from, as examples
+    const fixes = [...state.fixes].filter(([id, g]) => state.learned.get(id) === g && fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
     const ex: Examples = { emb: new Float32Array(fixes.length * CLIP_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
     fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * CLIP_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
     let ai: { g: Uint8Array; p: Float32Array } = { g: new Uint8Array(0), p: new Float32Array(0) };
@@ -339,13 +351,21 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
   }
 }
 
+/** Fixes made (or changed) since you last pressed "Learn from my fixes". */
+export const newFixCount = (s: SortState) => { let n = 0; for (const [id, g] of s.fixes) if (s.learned.get(id) !== g) n++; return n; };
+
 /** You put a photo in another group. It stays there; "Learn from my fixes" uses it for similar photos. */
-export async function fixGroup(id: string, g: string) {
+export const fixGroup = (id: string, g: string) => fixGroups([id], g);
+
+/** You put many photos in another group at once (ticked ones). Like fixGroup for each. */
+export async function fixGroups(ids: readonly string[], g: string) {
   await load();
-  state.fixes.delete(id);
-  state.fixes.set(id, g);
   const gi = GROUP_BY_ID.get(g);
-  if (gi != null) state.placed.set(id, { g: gi, p: 1, why: 'you' });
+  for (const id of ids) {
+    state.fixes.delete(id);
+    state.fixes.set(id, g);
+    if (gi != null) state.placed.set(id, { g: gi, p: 1, why: 'you' });
+  }
   await saveKv();
   notify();
 }
@@ -386,7 +406,9 @@ export async function replaceAllSort(recs: SortRec[], fixes: [string, string][],
   state.recs.clear();
   recs.forEach((r) => state.recs.set(r.id, r));
   state.fixes = new Map(fixes);
+  state.learned = new Map(fixes); // a backup's fixes count as learned, as they did before
   state.checks = new Map(checks);
+  await d.put('kv', fixes, 'learned');
   await d.put('kv', fixes, 'fixes');
   await d.put('kv', checks, 'checks');
   state.loaded = true;

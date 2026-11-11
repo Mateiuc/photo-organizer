@@ -56,9 +56,11 @@ function TopicCard({ t, n, away, google, missing, busy, gp, open, onOpen, onEdit
   const r = st.run;
   const mine = r.id === t.id;
   const marks = (t.yes?.length ?? 0) + (t.no?.length ?? 0);
+  // Only photos in the app are counted; when none of a topic's photos are, it says so without numbers.
+  const notHere = "Its photos aren't in the app right now: read your photos again (Choose photos) to see them.";
   const status = t.learnedAt
-    ? `${n.toLocaleString()} photos · learned from ${t.yes?.length ?? 0} ✓ and ${t.no?.length ?? 0} ✗, ${when(t.learnedAt)}${away ? ` · ${away.toLocaleString()} more found that aren't in the app now` : ''}`
-    : t.at ? `${google.toLocaleString()} photos found by Google Photos' search, ${when(t.at)}${missing ? ` · ${missing.toLocaleString()} more not in the app yet` : ''}`
+    ? (n === 0 && away > 0 ? notHere : `${n.toLocaleString()} photos · learned from ${t.yes?.length ?? 0} ✓ and ${t.no?.length ?? 0} ✗, ${when(t.learnedAt)}`)
+    : t.at ? (google === 0 && missing > 0 ? notHere : `${google.toLocaleString()} photos found by Google Photos' search, ${when(t.at)}`)
       : marks ? `${marks} marked so far` : gp && t.queries.length ? 'Not searched yet' : 'No photos marked yet';
   return (
     <div className={`panel topic ${open ? 'on' : ''}`}>
@@ -199,8 +201,8 @@ function TopicView({ t, all, shownIds, byKey, gp, onOpen, onClose, onSetup }: { 
       {tab === 'found' && <p className="muted small" style={{ margin: 0 }}>Best matches first. Your ✓ photos are included; your ✗ photos are left out.{changed ? ' Your marks changed since this was found: press Find again to use them.' : ''}</p>}
       {unseen.out > 0 && (
         <p className="notice" style={{ margin: 0 }}>
-          {unseen.out.toLocaleString()} {unseen.out === 1 ? "photo here isn't" : "photos here aren't"} in the app's photo list right now, so {unseen.out === 1 ? "it can't" : "they can't"} be shown.
-          {' '}This happens when another folder was chosen, when Google Photos or Drive hasn't been read since {unseen.out === 1 ? 'it was' : 'they were'} added, or when {unseen.out === 1 ? 'it was' : 'they were'} deleted.
+          {list.length ? 'Some photos of this topic' : "This topic's photos"} aren't in the app's photo list right now, so they can't be shown.
+          {' '}This happens when another folder was chosen, when Google Photos or Drive hasn't been read since, or when they were deleted.
           {' '}Your marks are kept: <button className="link" onClick={onSetup}>read Google Photos or your Drive again</button> to see them.
         </p>
       )}
@@ -263,7 +265,13 @@ export function Search({ items, all, onOpen, onSetup }: { items: Item[]; all: It
         {freeErr && freeErr !== OLD_HELPER && <p className="error" style={{ margin: 0 }}>{freeErr}</p>}
         {st.run.error && st.run.error !== OLD_HELPER && <p className="error" style={{ margin: 0 }}>{st.run.error}</p>}
       </div>
-      {editTopicObj ? <EditTopic key={editTopicObj.id} t={editTopicObj} onDone={() => setEditing(null)} /> : (
+      {!all.length ? (
+        <div className="panel">
+          <h2 style={{ margin: 0 }}>No photos in the app yet</h2>
+          <p className="muted" style={{ margin: 0 }}>Read your photos first (Google Photos, Drive or a folder), then come back here. Your topics and marks are kept.</p>
+          <div className="row"><button className="btn primary" onClick={onSetup}>Choose photos</button></div>
+        </div>
+      ) : editTopicObj ? <EditTopic key={editTopicObj.id} t={editTopicObj} onDone={() => setEditing(null)} /> : (
         <>
           <div className="topics">
             {st.topics.map((t) => {
@@ -277,7 +285,7 @@ export function Search({ items, all, onOpen, onSetup }: { items: Item[]; all: It
           <NewTopic onMade={(t) => setOpen(t.id)} />
         </>
       )}
-      {topic && !editTopicObj && <TopicView key={topic.id} t={topic} all={all} shownIds={shownIds} byKey={byKey} gp={gp} onOpen={onOpen} onClose={() => setOpen(null)} onSetup={onSetup} />}
+      {topic && !editTopicObj && all.length > 0 && <TopicView key={topic.id} t={topic} all={all} shownIds={shownIds} byKey={byKey} gp={gp} onOpen={onOpen} onClose={() => setOpen(null)} onSetup={onSetup} />}
       {open === 'free' && free && (
         <>
           <div className="row">
@@ -287,7 +295,7 @@ export function Search({ items, all, onOpen, onSetup }: { items: Item[]; all: It
             )}
             <button className="btn small" onClick={() => setOpen(null)}>Close</button>
           </div>
-          {missingOf(free.keys) > 0 && <p className="muted" style={{ margin: 0 }}>{missingOf(free.keys).toLocaleString()} more {missingOf(free.keys) === 1 ? 'was' : 'were'} found in Google Photos but {missingOf(free.keys) === 1 ? "isn't" : "aren't"} in the app yet (added since it last read your library). <button className="link" onClick={onSetup}>Read Google Photos again</button> to see them.</p>}
+          {missingOf(free.keys) > 0 && <p className="muted" style={{ margin: 0 }}>Google Photos found more that aren't in the app yet (added since it last read your library). <button className="link" onClick={onSetup}>Read Google Photos again</button> to see them.</p>}
           <MonthGrid items={freeResults} onOpen={onOpen} />
         </>
       )}

@@ -20,7 +20,7 @@ export function byPlace(list: Item[]) {
 }
 
 /** The bar along the bottom while selecting. */
-export function SelectBar({ exists, onTrash }: { exists: (id: string) => boolean; onTrash: (ids: string[]) => void }) {
+export function SelectBar({ exists, onTrash, extra }: { exists: (id: string) => boolean; onTrash: (ids: string[]) => void; extra?: (ids: string[]) => React.ReactNode }) {
   const sel = useSelection();
   const shown = useShownCount();
   if (!sel.on) return null;
@@ -36,6 +36,7 @@ export function SelectBar({ exists, onTrash }: { exists: (id: string) => boolean
       <span className="grow" />
       {shown > 0 && <button className="btn small" onClick={selectAllShown}>Select all {shown.toLocaleString()}</button>}
       {n > 0 && <button className="btn small" onClick={clearTicks}>Clear</button>}
+      {n > 0 && extra?.(ids)}
       <button className="btn small danger" disabled={!n} onClick={() => onTrash(ids)}>Move to trash</button>
       <button className="btn small" onClick={stopSelecting}>Done</button>
     </div>

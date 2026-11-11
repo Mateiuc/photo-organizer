@@ -1,10 +1,11 @@
-// Clean up: the CLIP AI sorts every photo into Junk and Keep groups. This first version only sorts and shows, so you
-// can check how good it is on your own photos. Nothing here deletes or moves anything.
+// Clean up: the CLIP AI sorts every photo into Junk and Keep groups. Open a group, tick its photos (all, or only the
+// sure ones) and use the bottom bar: Move to trash (after a confirm window, with Undo) or Move to group.
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { setTicked, startSelecting, stopSelecting, useShownList, useTickedOf } from '../lib/selection';
 import type { Item } from '../lib/model';
 import { GROUP_BY_ID, GROUPS, SIDES, type Side } from '../sort/groups';
 import { NEEDS_SIGN_IN, signIn } from '../drive/api';
-import { checkPhoto, clearChecks, fixGroup, fresh, inDrive, needsSort, placeAll, retryUnreadable, sortable, sortPhotos, stopSorting, useSort } from '../sort/store';
+import { checkPhoto, clearChecks, fixGroup, fixGroups, fresh, inDrive, needsSort, newFixCount, placeAll, retryUnreadable, sortable, sortPhotos, stopSorting, useSort } from '../sort/store';
 import { Thumb } from './Grid';
 
 const sideOf = (g: number) => GROUPS[g].side;
@@ -26,10 +27,10 @@ function GroupSelect({ it, value, onPick }: { it: Item; value: number; onPick: (
 const WHY = { ai: '', name: 'file name', face: 'face', you: 'you' } as const;
 
 /** One photo: its picture, how sure the AI is, and the group (change it to fix a mistake). */
-function CleanTile({ it, g, p, why, onOpen, check }: { it: Item; g: number; p: number; why: keyof typeof WHY; onOpen: () => void; check?: { answered?: boolean; ok?: boolean } }) {
+function CleanTile({ it, g, p, why, onOpen, check, selectable }: { it: Item; g: number; p: number; why: keyof typeof WHY; onOpen: () => void; check?: { answered?: boolean; ok?: boolean }; selectable?: boolean }) {
   return (
     <div className={`ctile${why === 'you' ? ' fixed' : ''}${check?.answered ? (check.ok ? ' right' : ' wrong') : ''}`}>
-      <Thumb item={it} onOpen={onOpen} />
+      <Thumb item={it} onOpen={onOpen} selectable={selectable} />
       <span className="sure" title="How sure the AI is">{why === 'you' ? 'you' : `${Math.round(p * 100)}%`}{WHY[why] && why !== 'you' ? ` · ${WHY[why]}` : ''}</span>
       <div className="cbar">
         {check && !check.answered && <button className="ok" aria-label={`${it.name} is right`} title="Right group" onClick={() => checkPhoto(it.id, GROUPS[g].id, GROUPS[g].id)}>✓ Right</button>}
@@ -44,6 +45,8 @@ function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; w
   const [limit, setLimit] = useState(300);
   const sentinel = useRef<HTMLDivElement>(null);
   const items = useMemo(() => list.map((x) => x.it), [list]);
+  const order = useMemo(() => list.map((x) => x.it.id), [list]);
+  useShownList(order); // so the bar's "Select all" and Shift-click work on this group
   useEffect(() => setLimit(300), [list.length]);
   useEffect(() => {
     const el = sentinel.current;
@@ -56,10 +59,43 @@ function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; w
   return (
     <div>
       <div className="grid">
-        {list.slice(0, limit).map((x, i) => <CleanTile key={x.it.id} it={x.it} g={x.g} p={x.p} why={x.why} onOpen={() => onOpen(items, i)} />)}
+        {list.slice(0, limit).map((x, i) => <CleanTile key={x.it.id} it={x.it} g={x.g} p={x.p} why={x.why} onOpen={() => onOpen(items, i)} selectable />)}
       </div>
       {limit < list.length && <div className="more" ref={sentinel}>Loading more…</div>}
     </div>
+  );
+}
+
+/** Sure enough that a whole group's photos can be ticked without looking at each one. */
+const SURE_TICK = 0.9;
+
+/** Tick a whole group, or only the photos the AI is very sure about. */
+function GroupTicks({ list }: { list: { it: Item; p: number }[] }) {
+  const all = useMemo(() => list.map((x) => x.it.id), [list]);
+  const sure = useMemo(() => list.filter((x) => x.p >= SURE_TICK).map((x) => x.it.id), [list]);
+  const state = useTickedOf(all);
+  if (!list.length) return null;
+  return (
+    <div className="row">
+      <button className="btn small" onClick={() => { startSelecting(); setTicked(all, true); }}>Tick all {all.length.toLocaleString()}</button>
+      {sure.length > 0 && sure.length < all.length && <button className="btn small" onClick={() => { startSelecting(); setTicked(all, false); setTicked(sure, true); }}>Tick only the sure ones ({Math.round(SURE_TICK * 100)}% or more) · {sure.length.toLocaleString()}</button>}
+      {state !== 'none' && <button className="btn small" onClick={() => setTicked(all, false)}>Untick all</button>}
+      <span className="muted small">Then use the bar at the bottom: Move to trash, or Move to group.</span>
+    </div>
+  );
+}
+
+/** In the bottom bar: put the ticked photos in another group at once. */
+export function MoveToGroup({ ids }: { ids: string[] }) {
+  return (
+    <select className="gsel" aria-label="Move the ticked photos to a group" value="" onChange={async (e) => { const g = e.target.value; if (!g) return; await fixGroups(ids, g); stopSelecting(); }}>
+      <option value="">Move {ids.length.toLocaleString()} to group…</option>
+      {SIDES.map((s) => (
+        <optgroup key={s.side} label={s.name}>
+          {GROUPS.filter((g) => g.side === s.side).map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </optgroup>
+      ))}
+    </select>
   );
 }
 
@@ -82,7 +118,8 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
     sortPhotos(all);
   };
 
-  // Groups are worked out when the page opens, when sorting stops, and when you ask it to learn.
+  // Groups are worked out when the page opens, when sorting stops, and when you ask it to learn. Only the fixes you
+  // asked it to learn from teach the AI, so moving or deleting photos doesn't shift other photos by itself.
   const placedFor = useRef('');
   useEffect(() => {
     if (!st.loaded || r.running || st.scoring) return;
@@ -99,6 +136,7 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
     return c;
   }, [st.placed, st.v, byId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [open, setOpen] = useState<number | null>(null);
+  useEffect(() => { stopSelecting(); }, [open]); // ticks belong to the group on screen
   const list = useMemo(() => {
     if (open == null) return [];
     const out: { it: Item; g: number; p: number; why: 'ai' | 'name' | 'face' | 'you' }[] = [];
@@ -125,7 +163,7 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
     return { n, ok };
   };
   const junkScore = score('junk'), restScore = score('rest');
-  const newFixes = st.fixes.size - st.learnedFrom;
+  const newFixes = newFixCount(st);
   const rate = r.running && r.step === 'sorting' && r.startedAt && r.done > 5 ? r.done / ((Date.now() - r.startedAt) / 1000) : 0;
 
   return (
@@ -133,7 +171,7 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
       <div className="panel">
         <p className="muted" style={{ margin: 0 }}>
           The app sorts your photos into groups with an AI that understands pictures and words together (CLIP, from OpenAI). It runs on this computer: no photo is sent anywhere.
-          The AI is downloaded once (about 600 MB) and the browser keeps it. <b>Nothing is deleted on this page</b>: it only sorts and shows, so you can check how good it is first.
+          The AI is downloaded once (about 600 MB) and the browser keeps it. Sorting deletes nothing. To clean up, open a group, tick its photos and use the bar at the bottom: <b>Move to trash</b> asks you first and can be undone, <b>Move to group</b> puts them in another group.
         </p>
         {r.running ? (
           <>
@@ -199,7 +237,7 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
           )}
           {newFixes > 0 && (
             <div className="row">
-              <button className="btn primary" disabled={st.scoring} onClick={() => placeAll(all, pathOf)}>{st.scoring ? 'Learning…' : `Learn from my ${newFixes.toLocaleString()} ${newFixes === 1 ? 'fix' : 'fixes'}`}</button>
+              <button className="btn primary" disabled={st.scoring} onClick={() => placeAll(all, pathOf, true)}>{st.scoring ? 'Learning…' : `Learn from my ${newFixes.toLocaleString()} ${newFixes === 1 ? 'fix' : 'fixes'}`}</button>
               <span className="muted">Photos that look like the ones you fixed move to the group you chose.</span>
             </div>
           )}
@@ -234,6 +272,7 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
             <span className="muted">Most sure first. If a photo is in the wrong group, pick the right one under it.</span>
             <button className="btn small" onClick={() => setOpen(null)}>Close</button>
           </div>
+          <GroupTicks list={list} />
           <CleanGrid list={list} onOpen={onOpen} />
         </div>
       )}
