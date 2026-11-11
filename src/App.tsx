@@ -21,9 +21,10 @@ import { allowAgain, startBackup, useBackup } from './lib/backup';
 import { when } from './views/Backup';
 import { useSimilar } from './pictures/groups';
 import { Search } from './views/Search';
+import { CleanUp } from './views/CleanUp';
 import { topicsByItem, useTopics } from './search/topics';
 
-type View = 'photos' | 'search' | 'places' | 'people' | 'folders' | 'duplicates' | 'setup';
+type View = 'photos' | 'search' | 'places' | 'people' | 'folders' | 'duplicates' | 'cleanup' | 'setup';
 const DEMO = new URLSearchParams(location.search).has('demo');
 const lib = new Library(DEMO ? 'photo-organizer-demo' : 'photo-organizer');
 const KINDS: { k: Kind; label: string }[] = [
@@ -354,6 +355,7 @@ export default function App() {
         {nav('people', 'People')}
         {nav('folders', 'Folders')}
         {nav('duplicates', 'Duplicates', dupCount)}
+        {nav('cleanup', 'Clean up')}
         <div className="grow" />
         {nav('setup', 'Choose photos')}
         {!DEMO && bk.supported && (
@@ -365,7 +367,7 @@ export default function App() {
       </nav>
       <div className="main">
         <header className="top">
-          <h1>{{ photos: 'Photos', search: 'Search', places: 'Places', people: 'People', folders: 'Folders', duplicates: 'Duplicates', setup: 'Choose photos' }[view]}</h1>
+          <h1>{{ photos: 'Photos', search: 'Search', places: 'Places', people: 'People', folders: 'Folders', duplicates: 'Duplicates', cleanup: 'Clean up', setup: 'Choose photos' }[view]}</h1>
           {view !== 'setup' && view !== 'folders' && (
             <>
               <input className="search" type="search" id="q" placeholder="Search names, people, topics, folders, camera…" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })} />
@@ -375,7 +377,7 @@ export default function App() {
               <button className={`chip ${showFilters ? 'on' : ''}`} onClick={() => setShowFilters(!showFilters)}>More filters</button>
               {active ? <button className="chip" onClick={() => setFilters(emptyFilters)}>Clear</button> : null}
               <span className="count">{shown.length.toLocaleString()} of {items.length.toLocaleString()}</span>
-              {view !== 'duplicates' && items.length > 0 && <button className={`btn small ${selecting ? 'primary' : ''}`} id="select" onClick={() => (selecting ? stopSelecting() : startSelecting())} title="Tick photos to move them to the trash">{selecting ? 'Done selecting' : 'Select'}</button>}
+              {view !== 'duplicates' && view !== 'cleanup' && items.length > 0 && <button className={`btn small ${selecting ? 'primary' : ''}`} id="select" onClick={() => (selecting ? stopSelecting() : startSelecting())} title="Tick photos to move them to the trash">{selecting ? 'Done selecting' : 'Select'}</button>}
             </>
           )}
         </header>
@@ -402,6 +404,7 @@ export default function App() {
             {view === 'people' && <People items={shown} onOpen={open} readOnly={!DEMO && !gpCount && (isLocal ? needsReopen : !signedIn)} />}
             {view === 'folders' && <Folders folders={folders} items={items} roots={folderRoots} children={fx.children} onPick={(f) => { setFilters({ ...emptyFilters, folderId: f.id }); setShowFilters(true); setView('photos'); }} />}
             {view === 'duplicates' && <Duplicates items={shown} all={items} similar={similar} pathOf={fx.pathOf} onTrash={(list) => askTrash(list.map((x) => x.id))} onOpen={open} readOnly={!DEMO && (isLocal ? !canWrite || needsReopen : !signedIn)} local={isLocal} />}
+            {view === 'cleanup' && <CleanUp items={shown} all={items} onOpen={open} />}
             {view === 'setup' && <Setup demo={DEMO} source={meta.source} localName={meta.localName} onChooseFolder={chooseFolder} onChooseFiles={chooseFiles} roots={meta.source === 'drive' ? meta.roots : []} signedIn={signedIn} setSignedIn={setSignedIn} onScan={scan} scanning={scanning} progress={progress} onStop={() => { stopRef.current.stop = true; }} lastScan={meta.lastScan} onClear={async () => { await lib.clear(); setItems([]); setFolders([]); setMeta({ roots: [] }); }} gpCount={gpCount} gpLastScan={meta.gpLastScan} onScanGp={scanGp} />}
           </main>
         </div>

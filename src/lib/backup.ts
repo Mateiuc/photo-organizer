@@ -9,6 +9,8 @@
 //   faces-0001.json …      the faces themselves (fingerprint and small picture). Written once, never changed.
 //   pictures-0001.json …   what "Compare pictures" learned about each photo's picture. Written once, never changed.
 //   topics.json            search topics (like "Cars") and the photos each one found
+//   sort-0001.json …       what the Clean-up AI (CLIP) saw in each photo. Written once, never changed.
+//   cleanup.json           your fixes and checks on the Clean-up page
 import { useEffect, useState } from 'react';
 import { openDB } from 'idb';
 import { changes, markBackedUp, ready, replaceAll, subscribe, type StoredFace } from '../faces/people';
@@ -16,11 +18,12 @@ import type { Person } from '../faces/cluster';
 import { libraryEvents, type Library } from './store';
 import { markPicsBackedUp, picChanges, picturesReady, replaceAllPics, subscribePictures, type PicRec } from '../pictures/store';
 import { replaceAllTopics, subscribeTopics, topicChanges, topicsReady, type Topic } from '../search/topics';
+import { markSortBackedUp, replaceAllSort, sortChanges, sortReady, subscribeSort, type Check, type SortRec } from '../sort/store';
 
 export const BACKUP_FOLDER = 'Photo Organizer backup';
 type Dir = FileSystemDirectoryHandle;
 
-export interface Manifest { app: 'Photo Organizer'; v: 1; savedAt: string; photos: number; faces: number; people: number; named: number; pictures?: number }
+export interface Manifest { app: 'Photo Organizer'; v: 1; savedAt: string; photos: number; faces: number; people: number; named: number; pictures?: number; sorted?: number; fixes?: number }
 export interface BackupStatus {
   supported: boolean;
   folder?: string; // name of the backup folder's parent, as the user picked it
@@ -72,9 +75,9 @@ async function names(dir: Dir): Promise<string[]> {
   for await (const [n, h] of (dir as any).entries() as AsyncIterable<[string, FileSystemHandle]>) if (h.kind === 'file') out.push(n);
   return out;
 }
-type Kind = 'faces' | 'pictures';
+type Kind = 'faces' | 'pictures' | 'sort';
 const chunkName = (n: number, kind: Kind = 'faces') => `${kind}-${String(n).padStart(4, '0')}.json`;
-const chunkNo = (name: string, kind: Kind = 'faces') => { const m = name.match(/^(faces|pictures)-(\d+)\.json$/); return m && m[1] === kind ? +m[2] : undefined; };
+const chunkNo = (name: string, kind: Kind = 'faces') => { const m = name.match(/^(faces|pictures|sort)-(\d+)\.json$/); return m && m[1] === kind ? +m[2] : undefined; };
 const chunks = (files: string[], kind: Kind) => files.map((n) => chunkNo(n, kind)).filter((n): n is number => n != null);
 async function hasBackup(dir: Dir): Promise<Manifest | undefined> {
   try { return await readJson<Manifest>(dir, 'backup.json'); } catch { return undefined; }
@@ -97,6 +100,11 @@ const fromPicRow = (w: PicRow, b: number): PicRec => (w.x ? { id: w.i, x: 1, m: 
   id: w.i, h: new Uint32Array(unb64(w.h!).buffer), g: unb64(w.g!), e: new Int8Array(unb64(w.e!).buffer), sh: w.s, fl: w.f, ar: w.a, c: w.c, m: w.m, pw: w.W, ph: w.H, b,
 });
 
+interface SortRow { i: string; k?: string; x?: 1; m?: number }
+const sortRow = (r: SortRec): SortRow => (r.x ? { i: r.id, x: 1, m: r.m } : { i: r.id, k: b64(r.k!), m: r.m });
+const fromSortRow = (w: SortRow, b: number): SortRec => (w.x ? { id: w.i, x: 1, m: w.m, b } : { id: w.i, k: new Int8Array(unb64(w.k!).buffer), m: w.m, b });
+interface CleanupFile { v: 1; fixes: [string, string][]; checks: [string, Check][] }
+
 interface FaceRow { k: string; i: string; d: string; x: StoredFace['box']; c: string }
 interface PersonRow { id: string; name?: string; n: number; cover: string; s: string }
 interface PeopleFile { v: 1; people: PersonRow[]; who: Record<string, string>; scanned: string[] }
@@ -108,10 +116,12 @@ let libDirty = false;
 let seen = { edits: 0, faces: 0, resets: 0 };
 let seenPics = 0;
 let seenTopics = 0;
+let seenSort = { n: 0, edits: 0 };
 let timer: ReturnType<typeof setTimeout> | undefined;
 let due = 0;
 let wasRunning = false;
 let wasComparing = false;
+let wasSorting = false;
 
 /** Saves within `ms`, or sooner if a save is already planned sooner. */
 function soon(ms: number) {
@@ -136,6 +146,10 @@ export async function startBackup(library: Library, demo: boolean) {
   });
   subscribePictures(() => { if (picChanges.n !== seenPics) soon(300_000); }); // while comparing pictures: every 5 minutes
   subscribeTopics(() => { if (topicChanges.n !== seenTopics) soon(15_000); }); // a search finished or a topic changed
+  subscribeSort(() => {
+    if (sortChanges.edits !== seenSort.edits) soon(15_000); // fixes and checks: saved within seconds
+    else if (sortChanges.n !== seenSort.n) soon(300_000); // while sorting: every 5 minutes
+  });
   // Finding faces or comparing pictures stopped or finished: save what it found.
   setInterval(async () => {
     if (!dir) return;
@@ -145,6 +159,9 @@ export async function startBackup(library: Library, demo: boolean) {
     const ps = await picturesReady();
     if (wasComparing && !ps.run.running && picChanges.n !== seenPics) soon(3_000);
     wasComparing = ps.run.running;
+    const ss = await sortReady();
+    if (wasSorting && !ss.run.running && sortChanges.n !== seenSort.n) soon(3_000);
+    wasSorting = ss.run.running;
   }, 5000);
   const r = await remembered();
   if (!r) return;
@@ -167,6 +184,10 @@ async function check() {
   const havePics = new Set(chunks(files, 'pictures'));
   const lostPics = [...ps.recs.values()].filter((r) => r.b != null && !havePics.has(r.b)).map((r) => r.id);
   if (lostPics.length) { await markPicsBackedUp(lostPics, undefined); soon(2_000); }
+  const ss = await sortReady();
+  const haveSort = new Set(chunks(files, 'sort'));
+  const lostSort = [...ss.recs.values()].filter((r) => r.b != null && !haveSort.has(r.b)).map((r) => r.id);
+  if (lostSort.length) { await markSortBackedUp(lostSort, undefined); soon(2_000); }
 }
 
 /** After a click: allow saving again to the remembered folder (browsers ask once per visit unless told to always allow). */
@@ -185,6 +206,7 @@ export async function save(force = false): Promise<void> {
   const before = { ...changes };
   const picsBefore = picChanges.n;
   const topicsBefore = topicChanges.n;
+  const sortBefore = { ...sortChanges };
   const libWasDirty = libDirty; libDirty = false;
   try {
     const st = await ready();
@@ -207,6 +229,23 @@ export async function save(force = false): Promise<void> {
       await writeJson(dir, chunkName(nextPic, 'pictures'), part.map(picRow));
       await markPicsBackedUp(part.map((r) => r.id), nextPic);
       nextPic++;
+    }
+    // 1c. What the Clean-up AI saw, the same way.
+    const ss = await sortReady();
+    let nextSort = Math.max(0, ...chunks(files, 'sort')) + 1;
+    const freshSort = [...ss.recs.values()].filter((r) => r.b == null);
+    for (let i = 0; i < freshSort.length; i += 4000) {
+      const part = freshSort.slice(i, i + 4000);
+      await writeJson(dir, chunkName(nextSort, 'sort'), part.map(sortRow));
+      await markSortBackedUp(part.map((r) => r.id), nextSort);
+      nextSort++;
+    }
+    // 1d. Your Clean-up fixes and checks (never replaced by an empty list unless you cleared them here).
+    if (sortChanges.edits !== seenSort.edits || !files.includes('cleanup.json') || force) {
+      if (ss.fixes.size || ss.checks.size || !(status.saved?.fixes)) {
+        const data: CleanupFile = { v: 1, fixes: [...ss.fixes], checks: [...ss.checks] };
+        await writeJson(dir, 'cleanup.json', data);
+      }
     }
     // 2. People and names. Photos whose faces aren't all saved yet are left out, so they're looked at again after a restore.
     const unsaved = new Set([...st.faces.values()].filter((f) => f.b == null).map((f) => f.itemId));
@@ -236,18 +275,21 @@ export async function save(force = false): Promise<void> {
       const d = await lib.load();
       if (d.items.length || !prev?.photos) { await writeJson(dir, 'library.json', d); photos = d.items.length; }
     }
-    const m: Manifest = { app: 'Photo Organizer', v: 1, savedAt: new Date().toISOString(), photos, faces: st.faces.size, people: st.people.size, named: [...st.people.values()].filter((p) => p.name).length, pictures: ps.recs.size };
+    const m: Manifest = { app: 'Photo Organizer', v: 1, savedAt: new Date().toISOString(), photos, faces: st.faces.size, people: st.people.size, named: [...st.people.values()].filter((p) => p.name).length, pictures: ps.recs.size, sorted: ss.recs.size, fixes: ss.fixes.size };
     await writeJson(dir, 'backup.json', m);
     // Face files no face points to any more (after "Start over", or replaced by newer files) are removed last.
     const used = new Set([...st.faces.values()].map((f) => f.b));
     for (const n of files) { const c = chunkNo(n); if (c != null && !used.has(c)) await dir.removeEntry(n).catch(() => {}); }
     const usedPics = new Set([...ps.recs.values()].map((r) => r.b));
     for (const n of files) { const c = chunkNo(n, 'pictures'); if (c != null && !usedPics.has(c)) await dir.removeEntry(n).catch(() => {}); }
+    const usedSort = new Set([...ss.recs.values()].map((r) => r.b));
+    for (const n of files) { const c = chunkNo(n, 'sort'); if (c != null && !usedSort.has(c)) await dir.removeEntry(n).catch(() => {}); }
     seen = before;
     seenPics = picsBefore;
     seenTopics = topicsBefore;
+    seenSort = sortBefore;
     status.saved = m; status.savedAt = m.savedAt;
-    status.unsaved = changes.edits !== seen.edits || changes.faces !== seen.faces || picChanges.n !== seenPics || topicChanges.n !== seenTopics || libDirty;
+    status.unsaved = changes.edits !== seen.edits || changes.faces !== seen.faces || picChanges.n !== seenPics || topicChanges.n !== seenTopics || sortChanges.n !== seenSort.n || sortChanges.edits !== seenSort.edits || libDirty;
   } catch (e) {
     libDirty ||= libWasDirty;
     status.error = `The backup couldn't be saved: ${(e as Error).message}`;
@@ -276,8 +318,9 @@ export async function chooseFolder(): Promise<{ existing?: Manifest; canContinue
   const named = [...st.people.values()].filter((p) => p.name).length;
   const photos = (await lib?.load())?.items.length ?? 0;
   const ps = await picturesReady();
+  const ss = await sortReady();
   // Saving over an existing backup is only offered when nothing in it can be lost.
-  const canContinue = !existing || (st.faces.size >= existing.faces && st.people.size >= existing.people && named >= existing.named && photos >= existing.photos && ps.recs.size >= (existing.pictures ?? 0));
+  const canContinue = !existing || (st.faces.size >= existing.faces && st.people.size >= existing.people && named >= existing.named && photos >= existing.photos && ps.recs.size >= (existing.pictures ?? 0) && ss.recs.size >= (existing.sorted ?? 0) && ss.fixes.size >= (existing.fixes ?? 0));
   const use = async () => {
     if (!canContinue) return;
     dir = target; status.folder = parent; status.needsPermission = false;
@@ -286,6 +329,7 @@ export async function chooseFolder(): Promise<{ existing?: Manifest; canContinue
     // Everything is written to this folder afresh; old face files are removed once the new ones are saved.
     await markBackedUp([...st.faces.keys()], undefined);
     await markPicsBackedUp([...ps.recs.keys()], undefined);
+    await markSortBackedUp([...ss.recs.keys()], undefined);
     await save(true);
   };
   return { existing, canContinue, use, restore: () => restoreFrom(target, parent) };
@@ -317,9 +361,15 @@ async function restoreFrom(target: Dir, parent: string) {
     for (const w of await readJson<PicRow[]>(target, chunkName(n, 'pictures'))) pics.push(fromPicRow(w, n));
   }
   const topics = await readJson<{ topics: Topic[] }>(target, 'topics.json').catch(() => undefined);
+  const sorted: SortRec[] = [];
+  for (const n of chunks(all, 'sort').sort((a, b) => a - b)) {
+    for (const w of await readJson<SortRow[]>(target, chunkName(n, 'sort'))) sorted.push(fromSortRow(w, n));
+  }
+  const cleanup = await readJson<CleanupFile>(target, 'cleanup.json').catch(() => undefined);
   if (library) await lib.replaceAll(library);
   if (pics.length) await replaceAllPics(pics);
   if (topics?.topics?.length) await replaceAllTopics(topics.topics);
+  if (sorted.length || cleanup?.fixes?.length) await replaceAllSort(sorted, cleanup?.fixes ?? [], cleanup?.checks ?? []);
   if (pf) {
     const people: Person[] = pf.people.map((p) => ({ id: p.id, name: p.name, n: p.n, cover: p.cover, sum: unf32(p.s) }));
     await replaceAll(people, faces, pf.scanned);
@@ -329,6 +379,7 @@ async function restoreFrom(target: Dir, parent: string) {
   seen = { ...changes };
   seenPics = picChanges.n;
   seenTopics = topicChanges.n;
+  seenSort = { ...sortChanges };
   status.saved = await hasBackup(target); status.savedAt = status.saved?.savedAt; status.unsaved = false;
   tell();
 }

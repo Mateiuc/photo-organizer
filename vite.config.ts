@@ -20,8 +20,28 @@ const mediapipe = (): Plugin => ({
   },
 });
 
+// The runtime for the CLIP AI (ONNX Runtime, as shipped with transformers.js) is served from /ort/ the same way,
+// so it comes from this site and not from a third-party CDN.
+const ORT_DIR = 'node_modules/@huggingface/transformers/dist/';
+const ORT_FILES = ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm'];
+const ortRuntime = (): Plugin => ({
+  name: 'ort-runtime',
+  configureServer(server) {
+    server.middlewares.use('/ort/', (req, res, next) => {
+      const f = (req.url ?? '').split('?')[0].replace(/^\//, '');
+      if (!ORT_FILES.includes(f)) return next();
+      res.setHeader('Content-Type', f.endsWith('.wasm') ? 'application/wasm' : 'text/javascript');
+      res.end(readFileSync(ORT_DIR + f));
+    });
+  },
+  generateBundle() {
+    for (const f of ORT_FILES) this.emitFile({ type: 'asset', fileName: 'ort/' + f, source: readFileSync(ORT_DIR + f) });
+  },
+});
+
 // Served at https://<user>.github.io/photo-organizer/ in production.
 export default defineConfig(({ command }) => ({
-  plugins: [react(), mediapipe()],
+  plugins: [react(), mediapipe(), ortRuntime()],
+  worker: { format: 'es' },
   base: command === 'build' ? (process.env.BASE_PATH ?? '/photo-organizer/') : '/',
 }));

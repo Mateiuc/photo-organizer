@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@huggingface/transformers": "3.8.1",
     "@mediapipe/tasks-vision": "^1.2.2",
     "@vladmandic/face-api": "^1.7.15",
     "exifr": "^7.1.3",
