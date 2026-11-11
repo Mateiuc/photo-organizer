@@ -9,6 +9,7 @@ import type { Item } from '../lib/model';
 import { loadPicture } from '../lib/picture';
 import { hasFile } from '../local/fs';
 import { quantize } from '../pictures/compare';
+import { viaWhatsApp, whatsAppName } from '../lib/model';
 import { ready as facesReady } from '../faces/people';
 import { CLIP_DIM, CLIP_DTYPE, CLIP_MODEL, FP_VERSION, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, promptList, PROMPTS_VERSION, unitOf, type Bank, type Examples, type Placed } from './groups';
 
@@ -201,7 +202,9 @@ function mix(id: string): number {
 export async function sortPhotos(items: Item[]) {
   if (state.run.running) return;
   await load();
-  const todo = items.filter((it) => needsSort(it, state.recs.get(it.id)) && (!it.local || hasFile(it.id))).map((it) => [mix(it.id), it] as const).sort((a, b) => a[0] - b[0]).map(([, it]) => it);
+  // WhatsApp photos go last: their group comes from the name, so your camera photos are worth sorting first.
+  const order = (it: Item) => (whatsAppName(it.name) ? 2 ** 32 : 0) + mix(it.id);
+  const todo = items.filter((it) => needsSort(it, state.recs.get(it.id)) && (!it.local || hasFile(it.id))).map((it) => [order(it), it] as const).sort((a, b) => a[0] - b[0]).map(([, it]) => it);
   stopFlag = false;
   state.run = { running: true, done: 0, total: todo.length, step: 'model' };
   notify();
@@ -290,10 +293,10 @@ export async function retryUnreadable() {
 let scorer: Worker | null = null;
 let scoreSeq = 0;
 /** Puts every photo in a group: the AI's scores (with your fixes as examples), then the sure signals. */
-export async function placeAll(items: Item[]) {
+export async function placeAll(items: Item[], pathOf: (folderId?: string) => string = () => '') {
   await load();
   const withK = items.filter((it) => sortable(it) && fresh(state.recs.get(it.id)));
-  if (!withK.length && !items.some((it) => it.kind === 'screenshot')) { state.placed = new Map(); notify(); return; }
+  if (!withK.length && !state.fixes.size && !items.some((it) => it.kind === 'screenshot' || viaWhatsApp(it, pathOf))) { state.placed = new Map(); notify(); return; }
   state.scoring = true; notify();
   try {
     const b = withK.length ? await getBank() : null;
@@ -323,7 +326,7 @@ export async function placeAll(items: Item[]) {
       if (!sortable(it)) continue;
       const i = at.get(it.id);
       const fix = state.fixes.get(it.id);
-      const r = place(i != null ? { g: ai.g[i], p: ai.p[i] } : undefined, { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, screenshot: it.kind === 'screenshot', face: faces.has(it.id) });
+      const r = place(i != null ? { g: ai.g[i], p: ai.p[i] } : undefined, { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face: faces.has(it.id) });
       if (r) placed.set(it.id, r);
     }
     state.placed = placed;

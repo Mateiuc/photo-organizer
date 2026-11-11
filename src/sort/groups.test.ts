@@ -34,9 +34,11 @@ const photo = (mix: Record<string, number>) => {
 const pack = (ps: Int8Array[]) => { const k = new Int8Array(ps.length * CLIP_DIM); ps.forEach((p, i) => k.set(p, i * CLIP_DIM)); return k; };
 
 describe('clean-up groups', () => {
-  it('every group has sentences, and each group weighs the same in total', () => {
-    expect(GROUPS.every((g) => g.prompts.length >= 3)).toBe(true);
+  it('every group the AI picks from has sentences, and each weighs the same in total', () => {
+    expect(GROUPS.filter((g) => g.side !== 'whatsapp').every((g) => g.prompts.length >= 3)).toBe(true);
+    expect(GROUPS.find((g) => g.side === 'whatsapp')!.prompts).toEqual([]); // known from the name, never from the AI
     for (let g = 0; g < GROUPS.length; g++) {
+      if (!GROUPS[g].prompts.length) continue;
       const sum = [...bank.bias].map((b, i) => (bank.group[i] === g ? Math.exp(b) : 0)).reduce((a, b) => a + b, 0);
       expect(sum).toBeCloseTo(1, 5);
     }
@@ -76,5 +78,9 @@ describe('clean-up groups', () => {
     expect(place({ g: docs, p: 0.6 }, { face: true })).toEqual({ g: people, p: 0.9, why: 'face' }); // not sure it's a document: People
     expect(place({ g: docs, p: 0.95 }, { face: true })).toEqual({ g: docs, p: 0.95, why: 'ai' }); // an ID card has a face too
     expect(place(undefined, {})).toBeUndefined();
+    const wa = GROUP_BY_ID.get('whatsapp')!;
+    expect(place({ g: people, p: 0.9 }, { whatsapp: true, face: true })).toEqual({ g: wa, p: 1, why: 'name' }); // WhatsApp kept apart
+    expect(place({ g: docs, p: 0.9 }, { whatsapp: true, fix: food })).toEqual({ g: food, p: 1, why: 'you' }); // your fix still wins
+    expect(place(undefined, { whatsapp: true })).toEqual({ g: wa, p: 1, why: 'name' }); // even before the AI looked at it
   });
 });

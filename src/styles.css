@@ -237,6 +237,7 @@ button.link { background: none; border: 0; padding: 0; font: inherit; color: var
 .side.junk { border-left: 4px solid var(--bad); }
 .side.call { border-left: 4px solid #c58a00; }
 .side.keep { border-left: 4px solid var(--good); }
+.side.whatsapp { border-left: 4px solid #25d366; }
 .side.other { border-left: 4px solid var(--line); }
 .ctile { position: relative; display: grid; grid-template-rows: auto auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .ctile .tile { width: 100%; display: block; border-radius: 0; }

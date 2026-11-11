@@ -19,7 +19,7 @@ export const FP_VERSION = 2;
 /** Change when the sentences change, so the sentence fingerprints are made again. */
 export const PROMPTS_VERSION = 1;
 
-export type Side = 'junk' | 'call' | 'keep' | 'other';
+export type Side = 'junk' | 'call' | 'keep' | 'other' | 'whatsapp';
 export interface Group { id: string; name: string; side: Side; prompts: string[] }
 
 export const GROUPS: Group[] = [
@@ -64,6 +64,8 @@ export const GROUPS: Group[] = [
     'a photo of a landscape', 'a photo of a car', 'a photo of an animal', 'a photo of a street', 'a photo of a building', 'a photo of flowers',
     'a photo of the sea', 'a photo of mountains', 'a photo of a city', 'a photo of a garden', 'a photo of a room', 'a photo of a tool', 'a photo of a sunset',
   ] },
+  // Known from the file name or folder, not from the AI (so no sentences). Last, so the others keep their numbers.
+  { id: 'whatsapp', name: 'WhatsApp', side: 'whatsapp', prompts: [] },
 ];
 
 export const GROUP_BY_ID = new Map(GROUPS.map((g, i) => [g.id, i]));
@@ -72,6 +74,7 @@ export const SIDES: { side: Side; name: string; note: string }[] = [
   { side: 'call', name: 'Your call', note: 'Tell me if these are junk or keep.' },
   { side: 'keep', name: 'Keep', note: 'People and your work.' },
   { side: 'other', name: 'Everything else', note: 'Not junk, and not one of your keep groups.' },
+  { side: 'whatsapp', name: 'WhatsApp', note: 'Photos saved from WhatsApp, kept apart from your camera photos.' },
 ];
 
 /** Every sentence, in order, with the group it belongs to. */
@@ -189,12 +192,13 @@ export interface Placed { g: number; p: number; why: Why }
 export const FACE_JUNK_SURE = 0.8;
 
 /**
- * The final group of one photo: your fix first; then a screenshot recognised from the file itself; then a photo with
- * a face goes to People, unless the AI is very sure it is a document, label, screen or scan-tool screen (an ID card
- * has a face too).
+ * The final group of one photo: your fix first; then a WhatsApp photo or a screenshot, recognised from the file
+ * itself; then a photo with a face goes to People, unless the AI is very sure it is a document, label, screen or
+ * scan-tool screen (an ID card has a face too).
  */
-export function place(ai: { g: number; p: number } | undefined, o: { fix?: number; screenshot?: boolean; face?: boolean }): Placed | undefined {
+export function place(ai: { g: number; p: number } | undefined, o: { fix?: number; whatsapp?: boolean; screenshot?: boolean; face?: boolean }): Placed | undefined {
   if (o.fix != null) return { g: o.fix, p: 1, why: 'you' };
+  if (o.whatsapp) return { g: GROUP_BY_ID.get('whatsapp')!, p: 1, why: 'name' };
   if (o.screenshot) return { g: GROUP_BY_ID.get('shots')!, p: 1, why: 'name' };
   if (!ai) return undefined;
   const side = GROUPS[ai.g].side;

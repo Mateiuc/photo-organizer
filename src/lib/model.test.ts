@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { copyMark, misplaced, worseReason, pickSame, lesserCopy, localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
+import { viaWhatsApp, whatsAppName, copyMark, misplaced, worseReason, pickSame, lesserCopy, localToItem, mimeFromName, applyFilters, dateFromName, emptyFilters, exactDuplicates, exifToIso, kindOf, pickKeeper, sizedThumb, toItem, type Item } from './model';
 
 describe('dates', () => {
   it('reads camera time', () => expect(exifToIso('2017:07:01 17:25:23')).toBe('2017-07-01T17:25:23'));
@@ -94,6 +94,14 @@ describe('copies that lost camera data', () => {
     expect(lesserCopy(resaved, orig)).toBe('lower-quality copy');
     expect(lesserCopy({ ...resaved, mime: 'image/heic' }, orig)).toBe(''); // HEIC files are smaller by nature
     expect(pickSame([big, small], p, (x) => (x.id === 'small' ? 1e8 : 1e6)).id).toBe('small'); // sizes learned from the pictures
+  });
+});
+
+describe('WhatsApp files', () => {
+  it('knows them by name or folder', () => {
+    for (const n of ['IMG-20260925-WA0018.jpg', 'VID-20260925-WA0003.mp4', 'IMG-20260925-WA0018~2.jpg', 'WhatsApp Image 2026-09-25 at 14.38.54.jpeg']) expect(whatsAppName(n)).toBe(true);
+    for (const n of ['IMG_20260721_220047.jpg', 'Screenshot_20260925-143854_WhatsApp.jpg', 'WA0018.jpg']) expect(whatsAppName(n)).toBe(false);
+    expect(viaWhatsApp(base({ name: 'photo.jpg', folderId: 'f' }), () => 'DCIM/WhatsApp Images')).toBe(1);
   });
 });
 

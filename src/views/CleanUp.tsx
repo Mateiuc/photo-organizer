@@ -63,7 +63,7 @@ function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; w
   );
 }
 
-export function CleanUp({ items, all, onOpen }: { items: Item[]; all: Item[]; onOpen: (list: Item[], i: number) => void }) {
+export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: Item[]; onOpen: (list: Item[], i: number) => void; pathOf: (folderId?: string) => string }) {
   const st = useSort();
   const photos = useMemo(() => all.filter(sortable), [all]);
   const todo = useMemo(() => photos.filter((it) => needsSort(it, st.recs.get(it.id))), [photos, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -89,8 +89,8 @@ export function CleanUp({ items, all, onOpen }: { items: Item[]; all: Item[]; on
     const key = `${all.length}:${sortedN}`;
     if (placedFor.current === key) return;
     placedFor.current = key;
-    placeAll(all);
-  }, [st.loaded, r.running, st.scoring, all, sortedN]);
+    placeAll(all, pathOf);
+  }, [st.loaded, r.running, st.scoring, all, sortedN, pathOf]);
 
   const byId = useMemo(() => new Map(items.map((x) => [x.id, x])), [items]);
   const counts = useMemo(() => {
@@ -199,7 +199,7 @@ export function CleanUp({ items, all, onOpen }: { items: Item[]; all: Item[]; on
           )}
           {newFixes > 0 && (
             <div className="row">
-              <button className="btn primary" disabled={st.scoring} onClick={() => placeAll(all)}>{st.scoring ? 'Learning…' : `Learn from my ${newFixes.toLocaleString()} ${newFixes === 1 ? 'fix' : 'fixes'}`}</button>
+              <button className="btn primary" disabled={st.scoring} onClick={() => placeAll(all, pathOf)}>{st.scoring ? 'Learning…' : `Learn from my ${newFixes.toLocaleString()} ${newFixes === 1 ? 'fix' : 'fixes'}`}</button>
               <span className="muted">Photos that look like the ones you fixed move to the group you chose.</span>
             </div>
           )}

@@ -211,8 +211,10 @@ export function metaScore(x: Item): number {
 }
 /** Videos rarely carry camera data that Drive or the browser can read, so they always count as having it. */
 export const hasCameraData = (x: Item) => x.kind === 'video' || cameraDate(x) || x.lat != null || !!x.camera;
-/** Sent through WhatsApp: by its folder, or by its name (IMG-20260925-WA0018.jpg). */
-const viaWhatsApp = (x: Item, pathOf: (folderId?: string) => string) => (/whatsapp/i.test(pathOf(x.folderId)) || /-WA\d{4}\b/i.test(x.name) ? 1 : 0);
+/** A WhatsApp file name: IMG-20260925-WA0018.jpg (phone), "WhatsApp Image 2026-09-25 at 14.38.54.jpeg" (computer). */
+export const whatsAppName = (name: string) => /-WA\d{4}\b/i.test(name) || /^whatsapp (image|video|audio)\b/i.test(name);
+/** Sent through WhatsApp: by its folder, or by its name. */
+export const viaWhatsApp = (x: Item, pathOf: (folderId?: string) => string) => (whatsAppName(x.name) || /whatsapp/i.test(pathOf(x.folderId)) ? 1 : 0);
 
 /** 1 when the file name looks like a copy: "photo (1).jpg", "photo - Copy.jpg", "photo copie.jpg", "photo~2.jpg". */
 export function copyMark(name: string): number {
