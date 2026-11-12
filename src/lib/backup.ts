@@ -123,7 +123,7 @@ const fromSortRow = (w: SortRow, b: number): SortRec => (w.x ? { id: w.i, x: 1, 
 interface CleanupFile { v: 1; fixes: [string, string][]; checks: [string, Check][] }
 
 interface FaceRow { k: string; i: string; d: string; x: StoredFace['box']; c: string }
-interface PersonRow { id: string; name?: string; n: number; cover: string; s: string }
+interface PersonRow { id: string; name?: string; n: number; cover: string; s: string; /** set aside as a stranger (1) or brought back (0) */ x?: 0 | 1; /** faces you said aren't this person */ no?: string[] }
 interface PeopleFile { v: 1; people: PersonRow[]; who: Record<string, string>; scanned: string[] }
 
 // ---------- saving ----------
@@ -268,7 +268,7 @@ export async function save(force = false): Promise<void> {
     const unsaved = new Set([...st.faces.values()].filter((f) => f.b == null).map((f) => f.itemId));
     const who: Record<string, string> = {};
     for (const f of st.faces.values()) if (f.b != null) who[f.key] = f.person;
-    const people: PersonRow[] = [...st.people.values()].map((p) => ({ id: p.id, name: p.name, n: p.n, cover: p.cover, s: f32(p.sum) }));
+    const people: PersonRow[] = [...st.people.values()].map((p) => ({ id: p.id, name: p.name, n: p.n, cover: p.cover, s: f32(p.sum), ...(p.stranger != null ? { x: p.stranger ? 1 : 0 } as const : {}), ...(p.no?.length ? { no: p.no } : {}) }));
     const prev = status.saved;
     // Never replace a backup that has people with an empty one (only "Start over" may do that).
     if (people.length || !prev?.people || changes.resets !== seen.resets) {
@@ -403,7 +403,7 @@ async function restoreFrom(target: Dir, parent: string) {
   if (topics?.topics?.length) await replaceAllTopics(topics.topics);
   if (sorted.length || cleanup?.fixes?.length) await replaceAllSort(sorted, cleanup?.fixes ?? [], cleanup?.checks ?? []);
   if (pf) {
-    const people: Person[] = pf.people.map((p) => ({ id: p.id, name: p.name, n: p.n, cover: p.cover, sum: unf32(p.s) }));
+    const people: Person[] = pf.people.map((p) => ({ id: p.id, name: p.name, n: p.n, cover: p.cover, sum: unf32(p.s), ...(p.x != null ? { stranger: p.x === 1 } : {}), ...(p.no?.length ? { no: p.no } : {}) }));
     await replaceAll(people, faces, pf.scanned);
   }
   dir = target; status.folder = parent; status.needsPermission = false;

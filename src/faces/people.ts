@@ -119,6 +119,55 @@ async function save(put: Person[], del: string[], faceKeys: string[], faceOwner:
   notify();
 }
 
+/**
+ * Joins many unnamed people into one named person at once ("Yes, these are Nick"), and remembers the faces you left
+ * unticked as "not them", so they aren't suggested for that person again. One Undo takes it all back.
+ */
+export async function mergeMany(fromIds: string[], intoId: string, notThem: string[] = []): Promise<Undo> {
+  const into = state.people.get(intoId);
+  if (!into) return noUndo;
+  const froms = fromIds.map((id) => state.people.get(id)).filter((p): p is Person => !!p && p.id !== intoId);
+  if (!froms.length && !notThem.length) return noUndo;
+  let np: Person = into;
+  for (const f of froms) np = mergePeople(f, np);
+  if (notThem.length) np = { ...np, no: [...new Set([...(into.no ?? []), ...notThem])].slice(-5000) };
+  const owners = new Set(froms.map((f) => f.id));
+  const moved: [string, string][] = []; // face key, owner before
+  for (const f of state.faces.values()) if (owners.has(f.person)) moved.push([f.key, f.person]);
+  const d = await db();
+  const tx = d.transaction(['people', 'faces'], 'readwrite');
+  for (const [k] of moved) { const nf = { ...state.faces.get(k)!, person: intoId }; state.faces.set(k, nf); tx.objectStore('faces').put(nf); }
+  state.people.set(intoId, np); tx.objectStore('people').put(np);
+  for (const f of froms) { state.people.delete(f.id); tx.objectStore('people').delete(f.id); }
+  await tx.done;
+  changes.edits++;
+  notify();
+  return async () => {
+    const now = state.people.get(intoId);
+    if (!now) return;
+    const back = { ...into, name: now.name === np.name ? into.name : now.name };
+    const tx = (await db()).transaction(['people', 'faces'], 'readwrite');
+    for (const [k, owner] of moved) { const f = state.faces.get(k); if (f) { const nf = { ...f, person: owner }; state.faces.set(k, nf); tx.objectStore('faces').put(nf); } }
+    for (const p of [back, ...froms]) { state.people.set(p.id, p); tx.objectStore('people').put(p); }
+    await tx.done;
+    changes.edits++;
+    notify();
+  };
+}
+
+/** Sets a face aside as a stranger (true), brings it back (false), or lets size and count decide again (undefined). */
+export async function setStranger(id: string, value: boolean | undefined): Promise<Undo> {
+  const p = state.people.get(id);
+  if (!p) return noUndo;
+  const np: Person = { ...p, stranger: value };
+  if (value === undefined) delete np.stranger;
+  state.people.set(id, np);
+  await (await db()).put('people', np);
+  changes.edits++;
+  notify();
+  return async () => { if (state.people.has(id)) { state.people.set(id, p); await (await db()).put('people', p); changes.edits++; notify(); } };
+}
+
 /** Remembers that these faces are now in backup file number `n` (or in none, with undefined). */
 export async function markBackedUp(keys: Iterable<string>, n: number | undefined) {
   const d = await db();

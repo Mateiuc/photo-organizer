@@ -248,3 +248,20 @@ button.link { background: none; border: 0; padding: 0; font: inherit; color: var
 .ctile.fixed { border-color: var(--accent); }
 .ctile.right { border-color: var(--good); box-shadow: 0 0 0 2px var(--good); }
 .ctile.wrong { border-color: var(--bad); box-shadow: 0 0 0 2px var(--bad); }
+
+/* Name in batches: a grid of look-alike faces to tick */
+.faces.small { gap: 4px; }
+.faces.small .face { width: 36px; height: 36px; }
+.facebox.plain { border: 0; padding: 0; background: none; cursor: pointer; }
+.facebox.plain .face { width: 72px; height: 72px; }
+.bgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+.bface { display: grid; justify-items: center; gap: 4px; padding: 6px; border: 2px solid var(--line); border-radius: 10px; background: var(--panel); }
+.bface.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+.bpick { position: relative; border: 0; padding: 0; background: none; cursor: pointer; border-radius: 50%; }
+.bpick img, .bpick > span:first-child { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; display: block; background: var(--line); }
+.bface:not(.on) .bpick img { opacity: .55; }
+.btick { position: absolute; top: 0; left: 0; width: 24px; height: 24px; border-radius: 50%; border: 2px solid #fff; background: rgba(0,0,0,.3); color: transparent; font: 700 13px/20px var(--f-ui); box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+.bface.on .btick { background: var(--accent); color: #fff; }
+.bcount { position: absolute; bottom: 0; right: 0; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; background: var(--ink, #1a2232); color: #fff; font: 600 11px/22px var(--f-mono); }
+.bbar { display: block; width: 88px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bbar b { display: block; height: 100%; background: var(--accent); }

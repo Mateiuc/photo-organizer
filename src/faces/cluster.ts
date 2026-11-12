@@ -16,6 +16,10 @@ export interface Person {
   sum: number[];
   n: number;
   cover: string; // face key shown as the person's picture
+  /** You set this face aside as a stranger (true) or brought it back (false). Unset: decided by size and count. */
+  stranger?: boolean;
+  /** For a named person: unnamed faces you said aren't them, so they aren't suggested for them again. */
+  no?: string[];
 }
 
 /** Two faces closer than this are taken as the same person (the model's usual cut-off is 0.6; lower is stricter). */
