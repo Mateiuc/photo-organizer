@@ -364,6 +364,7 @@ export default function App() {
           </button>
         )}
         <div className="who">{DEMO ? 'Sample photos' : [isLocal ? `Folder: ${meta.localName ?? ''}` : meta.source === 'drive' ? (signedIn ? 'Connected to Drive' : 'Drive (not connected)') : '', gpCount ? 'Google Photos' : ''].filter(Boolean).join(' · ') || 'Not connected'}</div>
+        <div className="who credit">Developed by Chip</div>
       </nav>
       <div className="main">
         <header className="top">

@@ -166,6 +166,7 @@ kbd { font: 600 12px var(--f-mono, monospace); border: 1px solid var(--line); bo
 .who.bk { background: none; border: 0; text-align: left; cursor: pointer; font: inherit; color: inherit; padding: 0 10px; }
 .who.bk:hover { text-decoration: underline; }
 .who.bk.warn { color: #ffb4a8; font-weight: 600; }
+.who.credit { opacity: 0.6; font-size: 11px; }
 /* Duplicates: picture comparison */
 .tag.info { color: var(--accent); }
 .dup > .row h3 { margin: 0; }
