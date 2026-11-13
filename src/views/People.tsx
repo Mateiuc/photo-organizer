@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Item } from '../lib/model';
-import { findFaces, forgetAll, mergeInto, mergeMany, nameAs, rename, setStranger, splitFace, stop, usePeople, type Undo } from '../faces/people';
-import { centre, closest, LIKELY, SURE, type Person } from '../faces/cluster';
+import { findFaces, forgetAll, mergeInto, mergeMany, nameAs, readAgain, rename, setStranger, splitFace, stop, switchPreview, switchToNew, usePeople, type PeopleState, type Undo } from '../faces/people';
+import { BEST, centre, closest, LIKELY, SURE, type Person } from '../faces/cluster';
 import { batchesByPerson, isStranger, namedMatches, refOf, type Ref } from '../faces/batches';
 import { MonthGrid, Preview } from './Grid';
 
@@ -11,8 +11,10 @@ const photos = (g: Group) => `${g.items.size.toLocaleString()} photo${g.items.si
 const label = (g: Group) => g.p.name ?? photos(g);
 const hint = (d: number) => (d < SURE ? 'very likely' : d < LIKELY ? 'maybe' : 'unlikely');
 /** How full the closeness bar is: full when very alike, empty at the edge of "maybe". */
-const fill = (d: number) => Math.round(100 * Math.max(0.05, Math.min(1, (LIKELY + 0.05 - d) / (LIKELY + 0.05 - 0.3))));
+const fill = (d: number) => Math.round(100 * Math.max(0.05, Math.min(1, (LIKELY + 0.05 - d) / (LIKELY + 0.05 - BEST))));
 type Match = { g: Group; dist: number };
+/** "40 min" or "6 hours" for `n` photos at `secs` each. */
+const took = (n: number, secs: number) => { const m = Math.max(1, Math.round((n * secs) / 60)); return m < 90 ? `${m} min` : `${Math.round(m / 60).toLocaleString()} hours`; };
 
 /** Up to 3 people a face may be: people you named first (if alike enough), then unnamed ones. */
 function matchesFor(g: Group, refs: Ref[], groupById: Map<string, Group>, unnamed: Cand[], onlyAlike: boolean): Match[] {
@@ -233,6 +235,63 @@ function Review({ groups, unnamedCands, refs, groupById, strangers, byId, faceOf
   );
 }
 
+/**
+ * The faces were found by the older face AI: offer to read every photo again with the stronger one (AdaFace), and,
+ * once done, to switch, carrying the names over.
+ */
+function Upgrade({ st, photos, readOnly }: { st: PeopleState; photos: Item[]; readOnly?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [shown, setShown] = useState(false);
+  const left = photos.filter((x) => !st.next.scanned.has(x.id)).length;
+  const preview = useMemo(() => (left === 0 && shown ? switchPreview() : []), [left, shown, st.v]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (st.run.running) return null;
+  const doSwitch = async () => {
+    setBusy(true); setErr('');
+    await new Promise((r) => setTimeout(r, 50)); // let "Switching…" show first
+    try { await switchToNew(); } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+  if (left > 0) {
+    const started = st.next.scanned.size > 0;
+    return (
+      <div className="panel">
+        <h2 style={{ marginTop: 0 }}>A stronger face AI</h2>
+        <p className="muted">
+          The new face AI (AdaFace) tells people apart much better, also with turned heads, poor light and older photos. It reads every photo again; your
+          faces and names stay as they are meanwhile. When it's done, the names you gave are carried over to the new faces (same photo, same spot), and you
+          choose when to switch. The AI (about 187 MB) downloads once from Hugging Face; everything runs on this computer.
+        </p>
+        <div className="row">
+          <button className="btn primary" disabled={readOnly} onClick={() => readAgain(photos)}>{started ? `Carry on reading again · ${left.toLocaleString()} photos left` : `Read ${left.toLocaleString()} photos again with the stronger face AI`}</button>
+          <span className="muted">{started ? `${st.next.scanned.size.toLocaleString()} done, ${st.next.faces.size.toLocaleString()} faces found. ` : ''}About {took(left, 1)} (roughly a second a photo; less with a graphics card). You can pause and carry on later.</span>
+        </div>
+      </div>
+    );
+  }
+  const lost = preview.filter((x) => x.before && !x.after);
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>The stronger face AI has read all your photos</h2>
+      <p className="muted">It found {st.next.faces.size.toLocaleString()} faces (the older AI: {st.faces.size.toLocaleString()}). Switching puts the new faces in use: each named person keeps their name, and the new AI groups the other faces again. A copy of the old faces and names stays in your backup folder (“before-new-face-ai”).</p>
+      {!shown ? <div className="row"><button className="btn" onClick={() => setShown(true)}>See what happens to the names</button></div> : (
+        <>
+          <table className="small">
+            <thead><tr><th style={{ textAlign: 'left' }}>Name</th><th>Faces now</th><th>Found again</th></tr></thead>
+            <tbody>{preview.slice(0, 60).map((x) => <tr key={x.name}><td>{x.name}</td><td style={{ textAlign: 'center' }}>{x.before.toLocaleString()}</td><td style={{ textAlign: 'center' }}>{x.after.toLocaleString()}</td></tr>)}</tbody>
+          </table>
+          {preview.length > 60 && <p className="muted small">…and {(preview.length - 60).toLocaleString()} more people.</p>}
+          {lost.length > 0 && <p className="notice">Not found again, so these names would go: {lost.map((x) => x.name).join(', ')}.</p>}
+          <p className="muted small">"Found again" counts only faces in the same spot as before. After switching, the new AI may add more faces to each person by itself.</p>
+        </>
+      )}
+      <div className="row">
+        <button className="btn primary" disabled={busy} onClick={doSwitch}>{busy ? 'Switching…' : 'Switch to the stronger face AI'}</button>
+      </div>
+      {err && <p className="notice">{err}</p>}
+    </div>
+  );
+}
+
 export function People({ items, onOpen, readOnly }: { items: Item[]; onOpen: (list: Item[], i: number) => void; readOnly?: boolean }) {
   const st = usePeople();
   const [open, setOpen] = useState<string | null>(null);
@@ -310,8 +369,12 @@ export function People({ items, onOpen, readOnly }: { items: Item[]; onOpen: (li
     <div className="panel">
       {r.running ? (
         <>
-          <div className="stats"><div><b>{r.done.toLocaleString()}</b><span>of {r.total.toLocaleString()} photos looked at</span></div><div><b>{groups.length.toLocaleString()}</b><span>people so far</span></div></div>
-          <div className="muted">Looking at “{r.current ?? '…'}”. You can keep using the app meanwhile; it carries on if you switch tabs inside the app.</div>
+          {r.loading ? <div className="muted">{r.loading}</div> : r.upgrade ? (
+            <div className="stats"><div><b>{r.done.toLocaleString()}</b><span>of {r.total.toLocaleString()} photos read again with the stronger face AI</span></div><div><b>{st.next.faces.size.toLocaleString()}</b><span>faces found</span></div></div>
+          ) : (
+            <div className="stats"><div><b>{r.done.toLocaleString()}</b><span>of {r.total.toLocaleString()} photos looked at</span></div><div><b>{groups.length.toLocaleString()}</b><span>people so far</span></div></div>
+          )}
+          {!r.loading && <div className="muted">Looking at “{r.current ?? '…'}”{r.device ? ` (face AI on the ${r.device})` : ''}. You can keep using the app meanwhile; it carries on if you switch tabs inside the app.</div>}
           <div className="row"><button className="btn" onClick={stop}>Pause</button></div>
         </>
       ) : (
@@ -320,7 +383,7 @@ export function People({ items, onOpen, readOnly }: { items: Item[]; onOpen: (li
           <div className="row">
             {left > 0 && <button className="btn primary" disabled={readOnly} onClick={() => findFaces(photos)}>{st.scanned.size ? `Look at ${left.toLocaleString()} new photos` : `Find faces in ${left.toLocaleString()} photos`}</button>}
             {left === 0 && <span className="muted">All {photos.length.toLocaleString()} photos have been looked at.</span>}
-            {left > 0 && <span className="muted">About {Math.max(1, Math.round(left * 0.35 / 60)).toLocaleString()} min on a typical PC. You can pause and carry on later.</span>}
+            {left > 0 && <span className="muted">About {took(left, st.old ? 0.35 : 1)} on a typical PC. You can pause and carry on later.</span>}
           </div>
           {readOnly && <p className="muted">Open your photos first (Choose photos) so the app can read them.</p>}
         </>
@@ -329,6 +392,7 @@ export function People({ items, onOpen, readOnly }: { items: Item[]; onOpen: (li
       {r.error && <p className="notice">{r.error}</p>}
     </div>
   );
+  const upgrade = st.loaded && st.old && <Upgrade st={st} photos={photos} readOnly={readOnly} />;
 
   if (person) {
     const list = [...person.items].map((id) => byId.get(id)!).filter(Boolean);
@@ -380,6 +444,7 @@ export function People({ items, onOpen, readOnly }: { items: Item[]; onOpen: (li
   return (
     <div className="stack" style={{ maxWidth: 'none' }}>
       {status}
+      {upgrade}
       {undoBar}
       {!st.loaded ? <p className="muted">Loading…</p> : groups.length === 0 ? (
         !r.running && <p className="muted">No people yet.</p>

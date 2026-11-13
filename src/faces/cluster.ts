@@ -7,6 +7,11 @@ export interface Face {
   d: number[];
   box: [number, number, number, number]; // x, y, w, h as fractions of the picture
   crop: string; // small JPEG of the face, as a data URL
+  /** Which face AI made `d`: 'ada50' (AdaFace, 512 numbers). Unset: the older face-api (128 numbers). */
+  m?: string;
+  /** AdaFace only: how sure the detector was that it's a face, and how much the head is turned (0 straight on, 1 profile). */
+  s?: number;
+  t?: number;
 }
 
 /** A group of faces that look like the same person. `sum`/`n` give the average fingerprint. */
@@ -22,8 +27,28 @@ export interface Person {
   no?: string[];
 }
 
-/** Two faces closer than this are taken as the same person (the model's usual cut-off is 0.6; lower is stricter). */
-export const SAME_PERSON = 0.42;
+/**
+ * How close two fingerprints must be, for the face AI in use. face-api's fingerprints are 128 numbers (its usual
+ * cut-off is 0.6); AdaFace's are 512 numbers of length 1, so their distances run 0…2 (see faces/README for how the
+ * AdaFace numbers were measured). Lower is stricter.
+ *   same: a new face joins that person by itself. sure: "very likely". likely: "maybe". best: a near-certain match
+ *   (used only to draw the closeness bar). margin: how far past `likely` a person's average face may be and still
+ *   be worth comparing face by face.
+ */
+export interface Limits { same: number; sure: number; likely: number; best: number; margin: number }
+export const FACE_API_LIMITS: Limits = { same: 0.42, sure: 0.5, likely: 0.6, best: 0.3, margin: 0.2 };
+export const ADA_LIMITS: Limits = { same: 0.95, sure: 1.0, likely: 1.1, best: 0.7, margin: 0.2 };
+export let SAME_PERSON = FACE_API_LIMITS.same;
+/** Below this, a suggested match is very likely the same person; above LIKELY it's only a weak guess. */
+export let SURE = FACE_API_LIMITS.sure;
+export let LIKELY = FACE_API_LIMITS.likely;
+export let BEST = FACE_API_LIMITS.best;
+export let MARGIN = FACE_API_LIMITS.margin;
+/** Sets the limits for the face AI whose fingerprints are in use (by their length: 512 is AdaFace). */
+export function useLimits(dim: number) {
+  const l = dim === 512 ? ADA_LIMITS : FACE_API_LIMITS;
+  SAME_PERSON = l.same; SURE = l.sure; LIKELY = l.likely; BEST = l.best; MARGIN = l.margin;
+}
 
 export function distance(a: number[], b: number[]): number {
   let s = 0;
@@ -31,7 +56,14 @@ export function distance(a: number[], b: number[]): number {
   return Math.sqrt(s);
 }
 
+/** A person's average face. AdaFace's is scaled back to length 1, like each of its fingerprints. */
 export function centre(p: Person): number[] {
+  if (p.sum.length === 512) {
+    let ss = 0;
+    for (const v of p.sum) ss += v * v;
+    const len = Math.sqrt(ss) || 1;
+    return p.sum.map((v) => v / len);
+  }
   return p.sum.map((v) => v / p.n);
 }
 
@@ -82,7 +114,3 @@ export function closest<T extends { c: ArrayLike<number> }>(cands: T[], d: Array
   }
   return best.map((b) => ({ c: b.c, dist: Math.sqrt(b.dist) }));
 }
-
-/** Below this, a suggested match is very likely the same person; above LIKELY it's only a weak guess. */
-export const SURE = 0.5;
-export const LIKELY = 0.6;

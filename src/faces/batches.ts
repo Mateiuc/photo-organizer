@@ -1,6 +1,6 @@
 // Naming faces in batches: which unnamed faces look like someone you already named, and which faces are strangers.
 // Pure functions, so they can be tested and run anywhere.
-import { LIKELY, type Person } from './cluster';
+import { centre, LIKELY, MARGIN, type Person } from './cluster';
 
 /** A face narrower than this share of its picture is "small" (someone in the background, a crowd, a poster). */
 export const SMALL_FACE = 0.08;
@@ -28,7 +28,7 @@ export function refOf(p: Person, faceFingerprints: ArrayLike<number>[], max = 10
   for (let i = 0; i < faceFingerprints.length && pick.length < max; i += step) pick.push(faceFingerprints[Math.floor(i)]);
   const faces = new Float32Array(pick.length * dim);
   pick.forEach((d, i) => faces.set(d, i * dim));
-  return { id: p.id, centre: Float32Array.from(p.sum, (v) => v / Math.max(1, p.n)), faces, n: pick.length, no: new Set(p.no ?? []) };
+  return { id: p.id, centre: Float32Array.from(p.n ? centre(p) : p.sum), faces, n: pick.length, no: new Set(p.no ?? []) };
 }
 
 function dist(a: ArrayLike<number>, b: ArrayLike<number>, bo = 0): number {
@@ -64,7 +64,7 @@ export function namedMatches(refs: Ref[], d: ArrayLike<number>, opts: { limit?: 
   const out: { id: string; dist: number }[] = [];
   for (const r of refs) {
     if (opts.skipNo && r.no.has(opts.skipNo)) continue;
-    if (dist(d, r.centre) > limit + 0.2) continue; // far from their average: no need to look at every face
+    if (dist(d, r.centre) > limit + MARGIN) continue; // far from their average: no need to look at every face
     const s = score(r, d);
     if (s < limit) out.push({ id: r.id, dist: s });
   }
