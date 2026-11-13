@@ -74,7 +74,7 @@ export const SIDES: { side: Side; name: string; note: string }[] = [
   { side: 'call', name: 'Your call', note: 'Tell me if these are junk or keep.' },
   { side: 'keep', name: 'Keep', note: 'People and your work.' },
   { side: 'other', name: 'Everything else', note: 'Not junk, and not one of your keep groups.' },
-  { side: 'whatsapp', name: 'WhatsApp', note: 'Photos saved from WhatsApp, kept apart from your camera photos.' },
+  { side: 'whatsapp', name: 'WhatsApp', note: 'Photos and videos saved from WhatsApp, kept apart from your camera photos.' },
 ];
 
 /** Every sentence, in order, with the group it belongs to. */

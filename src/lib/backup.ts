@@ -11,6 +11,7 @@
 //   topics.json            search topics (like "Cars") and the photos each one found
 //   sort-0001.json …       what the Clean-up AI (CLIP) saw in each photo. Written once, never changed.
 //   cleanup.json           your fixes and checks on the Clean-up page
+//   kept.json              duplicate sets you said to keep as they are ("Keep both")
 //   newfaces-0001.json …   while the photos are read again with the stronger face AI: the faces found so far
 //   newfaces.json          …and which photos are done
 //   before-new-face-ai/    a copy of people.json and the faces-….json files from just before switching to the
@@ -23,6 +24,7 @@ import { libraryEvents, type Library, type Meta } from './store';
 import type { Folder, Item } from './model';
 import { markPicsBackedUp, picChanges, picturesReady, replaceAllPics, subscribePictures, type PicRec } from '../pictures/store';
 import { replaceAllTopics, subscribeTopics, topicChanges, topicsReady, type Topic } from '../search/topics';
+import { keptChanges, keptReady, replaceAllKept, subscribeKept } from '../pictures/kept';
 import { markSortBackedUp, replaceAllSort, sortChanges, sortReady, subscribeSort, type Check, type SortRec } from '../sort/store';
 
 export const BACKUP_FOLDER = 'Photo Organizer backup';
@@ -141,6 +143,7 @@ let libDirty = false;
 let seen = { edits: 0, faces: 0, resets: 0 };
 let seenPics = 0;
 let seenTopics = 0;
+let seenKept = 0;
 let seenSort = { n: 0, edits: 0 };
 let timer: ReturnType<typeof setTimeout> | undefined;
 let due = 0;
@@ -172,6 +175,7 @@ export async function startBackup(library: Library, demo: boolean) {
   });
   subscribePictures(() => { if (picChanges.n !== seenPics) soon(300_000); }); // while comparing pictures: every 5 minutes
   subscribeTopics(() => { if (topicChanges.n !== seenTopics) soon(15_000); }); // a search finished or a topic changed
+  subscribeKept(() => { if (keptChanges.n !== seenKept) soon(15_000); }); // a duplicate set kept, or shown again
   subscribeSort(() => {
     if (sortChanges.edits !== seenSort.edits) soon(15_000); // fixes and checks: saved within seconds
     else if (sortChanges.n !== seenSort.n) soon(300_000); // while sorting: every 5 minutes
@@ -254,6 +258,7 @@ export async function save(force = false): Promise<void> {
   const before = { ...changes };
   const picsBefore = picChanges.n;
   const topicsBefore = topicChanges.n;
+  const keptBefore = keptChanges.n;
   const sortBefore = { ...sortChanges };
   const libWasDirty = libDirty; libDirty = false;
   try {
@@ -331,6 +336,11 @@ export async function save(force = false): Promise<void> {
     if (topicChanges.n !== seenTopics || !hasFile || (force && anyFound)) {
       await writeJson(dir, 'topics.json', { v: 1, topics: ts.topics });
     }
+    // 2c. Duplicate sets you kept (never replaced by an empty list unless you emptied it here).
+    const ks = await keptReady();
+    if (keptChanges.n !== seenKept || (!files.includes('kept.json') && ks.sets.length) || (force && ks.sets.length)) {
+      if (ks.sets.length || files.includes('kept.json')) await writeJson(dir, 'kept.json', { v: 1, sets: ks.sets });
+    }
     // 3. The library, when it changed: never an empty one over a full one, and a much smaller one only after you say
     // so (choosing another folder, or a Google Photos or Drive read that didn't finish, would otherwise drop most of it).
     let photos = prev?.photos ?? 0;
@@ -366,9 +376,10 @@ export async function save(force = false): Promise<void> {
     seen = before;
     seenPics = picsBefore;
     seenTopics = topicsBefore;
+    seenKept = keptBefore;
     seenSort = sortBefore;
     status.saved = m; status.savedAt = m.savedAt;
-    status.unsaved = changes.edits !== seen.edits || changes.faces !== seen.faces || picChanges.n !== seenPics || topicChanges.n !== seenTopics || sortChanges.n !== seenSort.n || sortChanges.edits !== seenSort.edits || libDirty;
+    status.unsaved = changes.edits !== seen.edits || changes.faces !== seen.faces || picChanges.n !== seenPics || topicChanges.n !== seenTopics || keptChanges.n !== seenKept || sortChanges.n !== seenSort.n || sortChanges.edits !== seenSort.edits || libDirty;
   } catch (e) {
     libDirty ||= libWasDirty;
     status.error = `The backup couldn't be saved: ${(e as Error).message}`;
@@ -449,9 +460,11 @@ async function restoreFrom(target: Dir, parent: string) {
     for (const w of await readJson<SortRow[]>(target, chunkName(n, 'sort'))) sorted.push(fromSortRow(w, n));
   }
   const cleanup = await readJson<CleanupFile>(target, 'cleanup.json').catch(() => undefined);
+  const kept = await readJson<{ sets: string[][] }>(target, 'kept.json').catch(() => undefined);
   if (library) await lib.replaceAll(library);
   if (pics.length) await replaceAllPics(pics);
   if (topics?.topics?.length) await replaceAllTopics(topics.topics);
+  if (kept?.sets?.length) await replaceAllKept(kept.sets);
   if (sorted.length || cleanup?.fixes?.length) await replaceAllSort(sorted, cleanup?.fixes ?? [], cleanup?.checks ?? []);
   if (pf) {
     const people: Person[] = pf.people.map((p) => ({ id: p.id, name: p.name, n: p.n, cover: p.cover, sum: unf32(p.s), ...(p.x != null ? { stranger: p.x === 1 } : {}), ...(p.no?.length ? { no: p.no } : {}) }));
@@ -463,6 +476,7 @@ async function restoreFrom(target: Dir, parent: string) {
   seen = { ...changes };
   seenPics = picChanges.n;
   seenTopics = topicChanges.n;
+  seenKept = keptChanges.n;
   seenSort = { ...sortChanges };
   status.saved = await hasBackup(target); status.savedAt = status.saved?.savedAt; status.unsaved = false;
   tell();
