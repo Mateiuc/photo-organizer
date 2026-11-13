@@ -11,7 +11,8 @@
 // brightened and black-and-white copies all matched. Shots of the same scene a moment apart don't count: they
 // go to look-alikes.
 // "Look-alikes": photos taken close together in time whose AI fingerprints are very close: bursts, retakes, and
-// crops. You choose how close with a slider.
+// crops. You choose how close with a slider. When both photos were already looked at by the CLIP AI in Clean up,
+// its fingerprints decide (CLIP knows what is in a picture much better); otherwise the MobileNet ones do.
 
 export const GRID = 32;
 export const DIM = 1280; // size of the AI fingerprint
@@ -158,7 +159,12 @@ export interface Packed {
   flat: Float32Array;
   time: Float64Array; // when taken (ms), NaN when unknown
   pixels: Float64Array; // width × height of the original, or its file size when unknown (to choose the best copy)
+  clip: Int8Array; // n × CLIP_LEN: the CLIP fingerprint from Clean up, all zeros when the photo has none
+  hasClip: Uint8Array; // 1 when the photo has a CLIP fingerprint
 }
+
+/** Size of a CLIP fingerprint (the same as CLIP_DIM in sort/groups). */
+export const CLIP_LEN = 512;
 
 export const SAME = { hamming: 8, corr: 0.94, flatHamming: 4, flatCorr: 0.98, flat: 10, blank: 3, shape: 0.03 };
 
@@ -219,12 +225,30 @@ export function norms(p: Packed): Float32Array {
   return out;
 }
 
+function clipNorms(p: Packed): Float32Array {
+  const out = new Float32Array(p.n);
+  for (let i = 0; i < p.n; i++) {
+    if (!p.hasClip[i]) continue;
+    let s = 0;
+    for (let k = 0; k < CLIP_LEN; k++) s += p.clip[i * CLIP_LEN + k] ** 2;
+    out[i] = Math.sqrt(s);
+  }
+  return out;
+}
+function clipSimilarity(p: Packed, i: number, j: number, nm: Float32Array): number {
+  let s = 0;
+  const a = i * CLIP_LEN, b = j * CLIP_LEN;
+  for (let k = 0; k < CLIP_LEN; k++) s += p.clip[a + k] * p.clip[b + k];
+  return nm[i] && nm[j] ? s / (nm[i] * nm[j]) : 0;
+}
+
 /**
  * Pairs of photos taken close together (within the next 40 photos and 24 hours) whose AI fingerprints are at least
- * 0.8 alike, as [i, j, similarity] triples. `skip[i]` leaves a photo out (an extra copy of another photo).
+ * 0.8 alike, as [i, j, similarity] triples. The CLIP fingerprints are used when both photos have one, else the
+ * MobileNet ones. `skip[i]` leaves a photo out (an extra copy of another photo).
  */
 export function nearPairs(p: Packed, skip?: Uint8Array): Float64Array {
-  const nm = norms(p);
+  const nm = norms(p), cn = clipNorms(p);
   const order = Array.from({ length: p.n }, (_, i) => i).filter((i) => !skip?.[i] && !Number.isNaN(p.time[i])).sort((a, b) => p.time[a] - p.time[b]);
   const out: number[] = [];
   for (let x = 0; x < order.length; x++) {
@@ -232,7 +256,7 @@ export function nearPairs(p: Packed, skip?: Uint8Array): Float64Array {
     for (let y = x + 1; y < order.length && y <= x + NEAR.window; y++) {
       const j = order[y];
       if (p.time[j] - p.time[i] > NEAR.hours * 3600e3) break;
-      const s = similarity(p.emb, i, j, nm);
+      const s = p.hasClip[i] && p.hasClip[j] ? clipSimilarity(p, i, j, cn) : similarity(p.emb, i, j, nm);
       if (s >= NEAR.min) out.push(Math.min(i, j), Math.max(i, j), s);
     }
   }

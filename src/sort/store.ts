@@ -335,7 +335,7 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
     const at = new Map(withK.map((it, i) => [it.id, i]));
     const placed = new Map<string, Placed>();
     for (const it of items) {
-      if (!sortable(it)) continue;
+      if (!sortable(it) && !(it.kind === 'video' && viaWhatsApp(it, pathOf))) continue; // WhatsApp videos join the WhatsApp group
       const i = at.get(it.id);
       const fix = state.fixes.get(it.id);
       const r = place(i != null ? { g: ai.g[i], p: ai.p[i] } : undefined, { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face: faces.has(it.id) });

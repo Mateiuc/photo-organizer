@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { colour, coloursDiffer, correlation, DIM, flatness, greyGrid, hamming, hashes, lookAlikes, nearPairs, quantize, samePhotos, sharpness, turn, type Packed } from './compare';
+import { CLIP_LEN, colour, coloursDiffer, correlation, DIM, flatness, greyGrid, hamming, hashes, lookAlikes, nearPairs, quantize, samePhotos, sharpness, turn, type Packed } from './compare';
 
 /** A made-up photo: a few coloured shapes on a gradient. */
 function picture(seed: number, w = 240, h = 180) {
@@ -70,7 +70,7 @@ describe('describing a picture', () => {
 
 function pack(pics: { p: ReturnType<typeof picture>; t?: number; e?: number[] }[]): Packed {
   const n = pics.length;
-  const out: Packed = { n, hash: new Uint32Array(n * 8), grid: new Uint8Array(n * 1024), emb: new Int8Array(n * DIM), shape: new Float32Array(n), flat: new Float32Array(n), time: new Float64Array(n), pixels: new Float64Array(n) };
+  const out: Packed = { n, hash: new Uint32Array(n * 8), grid: new Uint8Array(n * 1024), emb: new Int8Array(n * DIM), shape: new Float32Array(n), flat: new Float32Array(n), time: new Float64Array(n), pixels: new Float64Array(n), clip: new Int8Array(n * CLIP_LEN), hasClip: new Uint8Array(n) };
   pics.forEach(({ p, t, e }, i) => {
     const g = grid(p);
     out.grid.set(g, i * 1024); out.hash.set(hashes(g), i * 8); out.shape[i] = p.w / p.h; out.flat[i] = flatness(g);
@@ -112,6 +112,18 @@ describe('finding look-alikes', () => {
     expect(groups.map((g) => g.sort())).toEqual([[0, 1, 2]]);
     expect(lookAlikes(pairs, 0.999)).toEqual([]);
     expect(nearPairs(p, Uint8Array.from([0, 1, 1, 0, 0])).length).toBe(0); // extra copies left out
+  });
+
+  it('uses the CLIP fingerprints when both photos have one, else the basic ones', () => {
+    const p = pack([{ p: picture(1), t: 0, e: base }, { p: picture(2), t: min, e: base }, { p: picture(3), t: 2 * min, e: base }]);
+    const c = Array.from({ length: CLIP_LEN }, (_, k) => Math.sin(k * 0.21));
+    const other = Array.from({ length: CLIP_LEN }, (_, k) => Math.cos(k * 1.7));
+    p.clip.set(quantize(c), 0); p.clip.set(quantize(other), CLIP_LEN); p.hasClip[0] = 1; p.hasClip[1] = 1; // photo 2 has none
+    const pairs = [...nearPairs(p)];
+    const has = (i: number, j: number) => pairs.some((_v, k) => k % 3 === 0 && pairs[k] === i && pairs[k + 1] === j);
+    expect(has(0, 1)).toBe(false); // same basic fingerprint, but CLIP says they differ
+    expect(has(0, 2)).toBe(true); // no CLIP for photo 2: the basic fingerprints decide
+    expect(has(1, 2)).toBe(true);
   });
 
   it("doesn't chain slightly different photos into one big group", () => {

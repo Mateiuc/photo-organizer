@@ -51,5 +51,9 @@ export function demoLibrary(): { items: Item[]; folders: Folder[] } {
   for (const src of items.slice(5, 11)) items.push({ ...src, id: src.id + '-copy', folderId: 'cam21' });
   // and a few re-saved copies that lost their camera data (smaller file, no date, place or camera)
   for (const src of items.slice(70, 74)) items.push({ ...src, id: src.id + '-resaved', folderId: 'wai', md5: src.md5 + 'r', size: Math.round(src.size / 12), takenFrom: 'filename', camera: undefined, lat: undefined, lon: undefined, width: 1600, height: 1200 });
+  // and a video sent on WhatsApp: a new, smaller file of the same length
+  const vid = items.find((x) => x.kind === 'video' && x.folderId === 'ro8')!;
+  const day = vid.takenAt!.slice(0, 10).replace(/-/g, '');
+  items.push({ ...vid, id: vid.id + '-wa', name: `VID-${day}-WA0001.mp4`, folderId: 'wai', md5: vid.md5 + 'w', size: Math.round(vid.size / 15), takenFrom: 'filename', camera: undefined, lat: undefined, lon: undefined, width: 848, height: 636, durationMs: vid.durationMs! + 60 });
   return { items, folders };
 }
