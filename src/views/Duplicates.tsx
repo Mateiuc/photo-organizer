@@ -93,8 +93,8 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
     await keepTogether(ids);
     setLastKept(ids);
   };
-  // "Remove both": every copy marked. They still go through the same list and trash (with Undo) as any other.
-  const removeAll = (g: Item[]) => setChanged((m) => { const n = new Map(m); g.forEach((x) => canRemove(x) && n.set(x.id, true)); return n; });
+  // "Remove both": every copy of this set marked and shown in the trash list (you confirm there; Undo after).
+  const removeAll = (g: Item[]) => { setChanged((m) => { const n = new Map(m); g.forEach((x) => canRemove(x) && n.set(x.id, true)); return n; }); onTrash(g.filter(canRemove)); };
   const rec = (x: Item) => pics.recs.get(x.id);
   // Picture size: from the file's own data, or else as measured when the picture was compared.
   const dims = (x: Item) => { const r = rec(x); return !x.width && r?.pw && r.ph ? [r.pw, r.ph] : undefined; };
@@ -137,17 +137,16 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
 
   // The copy the app suggests keeping in each set (look-alikes: the sharpest).
   const keeperShown = (g: Item[]) => (tab === 'alike' ? g.reduce((a, b) => ((rec(b)?.sh ?? 0) > (rec(a)?.sh ?? 0) ? b : a)) : keeperOf(g));
-  // "Select all": every file of every set marked, the suggested best one too. You then click Keep on the ones to save.
-  const markAll = (on: boolean) => setChanged((m) => {
-    const n = new Map(m);
-    for (const g of groups) g.forEach((x) => canRemove(x) && n.set(x.id, on));
-    return n;
-  });
-  const chosen = groups.flatMap((g) => g.filter(isOut));
+  // One set at a time: every button acts on the set on screen only. When it is moved to the trash or kept, it leaves
+  // the list and the next set takes its place. "Skip" leaves a set for later.
+  const [pos, setPos] = useState(0);
+  const at = Math.min(pos, Math.max(0, groups.length - 1));
+  const cur = groups[at] as Item[] | undefined;
+  // "Select all": every file of this set marked, the suggested best one too. You then click Keep on the ones to save.
+  const markAll = (on: boolean) => cur && setChanged((m) => { const n = new Map(m); cur.forEach((x) => canRemove(x) && n.set(x.id, on)); return n; });
+  const chosen = cur ? cur.filter(isOut) : [];
   const space = chosen.reduce((s, x) => s + x.size, 0);
-  const [limit, setLimit] = useState(60);
-  const go = (t: Tab) => { setTab(t); setLimit(60); };
-  const extras = (gs: Item[][]) => gs.reduce((s, g) => s + g.length - 1, 0);
+  const go = (t: Tab) => { setTab(t); setPos(0); };
 
   return (
     <div className="stack" style={{ maxWidth: 'none' }}>
@@ -161,9 +160,8 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
       {(tab === 'same' || tab === 'alike') && <ComparePanel all={all} readOnly={readOnly} similar={similar} />}
       <div className="panel">
         <div className="stats">
-          <div><b>{groups.length.toLocaleString()}</b><span>sets</span></div>
-          {tab !== 'alike' && tab !== 'empty' && <div><b>{extras(groups).toLocaleString()}</b><span>extra copies</span></div>}
-          <div><b>{chosen.length.toLocaleString()}</b><span>marked to remove</span></div>
+          <div><b>{groups.length ? `${(at + 1).toLocaleString()} of ${groups.length.toLocaleString()}` : '0'}</b><span>{showKept ? 'kept sets' : 'sets left'}</span></div>
+          <div><b>{chosen.length.toLocaleString()}</b><span>marked in this set</span></div>
           <div><b>{fmtSize(space)}</b><span>you'd free</span></div>
         </div>
         {tab === 'empty' ? (
@@ -182,22 +180,26 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
           </>
         )}
         {groups.some((g) => g.some((x) => x.gp)) && <p className="muted" style={{ margin: 0 }}>Google Photos copies can be removed too: they go to Google Photos' Trash (restorable for 60 days). The app only suggests removing a Google Photos copy when the copy it keeps is also in Google Photos; otherwise click it yourself.</p>}
-        {(keptCount > 0 || showKept) && <label className="row muted"><input type="checkbox" checked={showKept} onChange={(e) => { setShowKept(e.target.checked); setLimit(60); }} /> Show only the {keptCount.toLocaleString()} {keptCount === 1 ? 'set' : 'sets'} you kept as they are</label>}
+        {(keptCount > 0 || showKept) && <label className="row muted"><input type="checkbox" checked={showKept} onChange={(e) => { setShowKept(e.target.checked); setPos(0); }} /> Show only the {keptCount.toLocaleString()} {keptCount === 1 ? 'set' : 'sets'} you kept as they are</label>}
         {lastKept && !showKept && <div className="row"><span>Kept {lastKept.length === 2 ? 'both' : `all ${lastKept.length}`}: not shown as duplicates again.</span><button className="btn small" onClick={async () => { await forgetKept(lastKept); setLastKept(null); }}>Undo</button></div>}
-        {!showKept && groups.some((g) => g.some(canRemove)) && <div className="row"><button className="btn danger" disabled={!chosen.length} onClick={() => onTrash(chosen)}>Move {chosen.length.toLocaleString()} marked {chosen.length === 1 ? 'copy' : 'copies'} to the trash…</button><button className="btn" onClick={() => markAll(true)}>Select all for remove</button>{chosen.length > 0 && <button className="btn" onClick={() => markAll(false)}>Unselect all</button>}<span className="muted">“★ Best to keep” shows the copy the app would keep; click ✓ Keep on the ones you want. You'll see the list before anything moves.</span></div>}
+        <p className="muted" style={{ margin: 0 }}>One set at a time: every button below works on this set only. Once you move its marked files to the trash or keep it, the next set comes. “★ Best to keep” is the copy the app would keep. You'll see the list before anything moves, and can Undo.</p>
       </div>
       {!groups.length && <p className="muted">{tab === 'exact' ? 'No identical files found.' : tab === 'same' ? (similar.compared ? 'No other copies of the same photo found so far.' : 'Compare the pictures first.') : tab === 'video' ? 'No WhatsApp copies of your videos found.' : tab === 'alike' ? (similar.compared ? 'No look-alikes at this setting.' : 'Compare the pictures first.') : ''}</p>}
-      {groups.slice(0, limit).map((g0) => {
+      {cur && [cur].map((g0) => {
         const keep = keeperOf(g0);
         const g = tab === 'exact' || tab === 'same' || tab === 'video' ? [keep, ...g0.filter((x) => x !== keep)] : g0; // the copy kept comes first
         return (
           <section className="dup" key={g0.map((x) => x.id).join('|')}>
+            {!showKept && g.some(canRemove) && <div className="row"><button className="btn danger" disabled={!chosen.length} onClick={() => onTrash(chosen)}>Move {chosen.length.toLocaleString()} marked {chosen.length === 1 ? 'file' : 'files'} to the trash…</button><button className="btn" onClick={() => markAll(true)}>Select all for remove</button>{chosen.length > 0 && <button className="btn" onClick={() => markAll(false)}>Unselect all</button>}</div>}
             <div className="row">
               <h3>{tab === 'empty' ? `${g.length} empty files` : tab === 'alike' ? `${g.length} look-alikes` : `${g.length} copies${tab === 'exact' ? ` · ${fmtSize(g[0].size)} each` : ''}`}</h3>
               {tab === 'alike' && g.some(canRemove) && !showKept && <button className="btn small" onClick={() => keepSharpest(g)}>Keep only the sharpest</button>}
               {tab !== 'empty' && !showKept && <button className="btn small" title="Not duplicates: keep every copy, and don't show this set again" onClick={() => keepAll(g)}>{g.length === 2 ? 'Keep both' : `Keep all ${g.length}`}</button>}
               {tab !== 'empty' && !showKept && g.some(canRemove) && <button className="btn small danger" title="Mark every copy to remove. You'll still see the list before anything moves, and can undo." onClick={() => removeAll(g)}>{g.length === 2 ? 'Remove both' : `Remove all ${g.length}`}</button>}
               {showKept && <button className="btn small" onClick={() => forgetKept(g.map((x) => x.id))}>Show as duplicates again</button>}
+              <span style={{ flex: 1 }} />
+              <button className="btn small" disabled={at === 0} onClick={() => setPos(at - 1)}>← Back</button>
+              <button className="btn small" disabled={at >= groups.length - 1} onClick={() => setPos(at + 1)}>Skip →</button>
             </div>
             <div className="grid">
               {g.map((x) => {
@@ -220,7 +222,6 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
           </section>
         );
       })}
-      {limit < groups.length && <button className="btn" onClick={() => setLimit((l) => l + 60)}>Show more sets</button>}
     </div>
   );
 }
