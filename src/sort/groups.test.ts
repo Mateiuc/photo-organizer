@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLIP_DIM, GROUP_BY_ID, GROUPS, makeBank, place, promptList, scoreAll, unitOf, type Examples } from './groups';
+import { choose, CLIP_DIM, GROUP_BY_ID, GROUPS, JUNK_SURE, makeBank, place, promptList, scoreAll, unitOf, type Examples } from './groups';
 import { quantize } from '../pictures/compare';
 
 // Stand-in fingerprints: each group points in its own direction, each sentence a little to the side of it.
@@ -82,5 +82,35 @@ describe('clean-up groups', () => {
     expect(place({ g: people, p: 0.9 }, { whatsapp: true, face: true })).toEqual({ g: wa, p: 1, why: 'name' }); // WhatsApp kept apart
     expect(place({ g: docs, p: 0.9 }, { whatsapp: true, fix: food })).toEqual({ g: food, p: 1, why: 'you' }); // your fix still wins
     expect(place(undefined, { whatsapp: true })).toEqual({ g: wa, p: 1, why: 'name' }); // even before the AI looked at it
+  });
+});
+
+describe('camera photos and unsure guesses', () => {
+  const G = GROUPS.length;
+  const id = (x: string) => GROUP_BY_ID.get(x)!;
+  const probs = (parts: Record<string, number>) => { const a = new Float32Array(G); for (const [k, v] of Object.entries(parts)) a[id(k)] = v; return a; };
+  it('a photo with camera information never goes to Screenshots: the next most likely group, counted among the rest', () => {
+    const pr = probs({ shots: 0.42, lights: 0.3, other: 0.2, docs: 0.08 });
+    expect(choose(pr, false)).toEqual({ g: id('shots'), p: expect.closeTo(0.42, 5) });
+    const c = choose(pr, true);
+    expect(c.g).toBe(id('lights'));
+    expect(c.p).toBeCloseTo(0.3 / 0.58, 5);
+    expect(place({ g: id('shots'), p: 0.42, probs: pr }, { camera: true })).toMatchObject({ g: id('lights'), why: 'ai' });
+    expect(place({ g: id('shots'), p: 0.42, probs: pr }, { camera: false })).toMatchObject({ g: id('other'), why: 'unsure', guess: id('shots') });
+  });
+  it('a junk group only gets photos the AI is at least 50% sure about; the rest go to Everything else, marked not sure', () => {
+    expect(JUNK_SURE).toBe(0.5);
+    const unsure = place({ g: id('screens'), p: 0.41, probs: probs({ screens: 0.41, other: 0.3, wires: 0.29 }) }, {});
+    expect(unsure).toEqual({ g: id('other'), p: expect.closeTo(0.41, 5), why: 'unsure', guess: id('screens') });
+    expect(place({ g: id('screens'), p: 0.6, probs: probs({ screens: 0.6, other: 0.4 }) }, {})).toMatchObject({ g: id('screens'), why: 'ai' });
+    // keep groups don't need 50%
+    expect(place({ g: id('wires'), p: 0.35, probs: probs({ wires: 0.35, other: 0.33, food: 0.32 }) }, {})).toMatchObject({ g: id('wires'), why: 'ai' });
+    // a screenshot known from its file name stays a screenshot
+    expect(place(undefined, { screenshot: true, camera: true })).toMatchObject({ g: id('shots'), why: 'name' });
+  });
+  it('has a Thermal camera group on the keep side, and colored rooms and plane views have sentences', () => {
+    expect(GROUPS[id('thermal')].side).toBe('keep');
+    expect(GROUPS[id('lights')].prompts.some((p) => p.includes('colored lighting'))).toBe(true);
+    expect(GROUPS[id('other')].prompts.some((p) => p.includes('airplane window'))).toBe(true);
   });
 });

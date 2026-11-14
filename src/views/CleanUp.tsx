@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { setTicked, startSelecting, stopSelecting, useShownList, useTickedOf } from '../lib/selection';
 import type { Item } from '../lib/model';
-import { GROUP_BY_ID, GROUPS, SIDES, type Side } from '../sort/groups';
+import { GROUP_BY_ID, GROUPS, SIDES, type Side, type Why } from '../sort/groups';
 import { NEEDS_SIGN_IN, signIn } from '../drive/api';
 import { checkPhoto, clearChecks, fixGroup, fixGroups, fresh, inDrive, needsSort, newFixCount, placeAll, retryUnreadable, sortable, sortPhotos, stopSorting, useSort } from '../sort/store';
 import { Thumb } from './Grid';
@@ -24,14 +24,14 @@ function GroupSelect({ it, value, onPick }: { it: Item; value: number; onPick: (
   );
 }
 
-const WHY = { ai: '', name: 'file name', face: 'face', you: 'you' } as const;
+const WHY = { ai: '', name: 'file name', face: 'face', you: 'you', unsure: 'not sure' } as const;
 
 /** One photo: its picture, how sure the AI is, and the group (change it to fix a mistake). */
-function CleanTile({ it, g, p, why, onOpen, check, selectable }: { it: Item; g: number; p: number; why: keyof typeof WHY; onOpen: () => void; check?: { answered?: boolean; ok?: boolean }; selectable?: boolean }) {
+function CleanTile({ it, g, p, why, guess, onOpen, check, selectable }: { it: Item; g: number; p: number; why: keyof typeof WHY; guess?: number; onOpen: () => void; check?: { answered?: boolean; ok?: boolean }; selectable?: boolean }) {
   return (
     <div className={`ctile${why === 'you' ? ' fixed' : ''}${check?.answered ? (check.ok ? ' right' : ' wrong') : ''}`}>
       <Thumb item={it} onOpen={onOpen} selectable={selectable} />
-      <span className="sure" title="How sure the AI is">{why === 'you' ? 'you' : `${Math.round(p * 100)}%`}{WHY[why] && why !== 'you' ? ` · ${WHY[why]}` : ''}</span>
+      <span className="sure" title={why === 'unsure' && guess != null ? `The AI leaned to ${GROUPS[guess].name}, but only ${Math.round(p * 100)}% sure: not enough to call it junk` : 'How sure the AI is'}>{why === 'you' ? 'you' : `${Math.round(p * 100)}%`}{WHY[why] && why !== 'you' ? ` · ${WHY[why]}` : ''}</span>
       <div className="cbar">
         {check && !check.answered && <button className="ok" aria-label={`${it.name} is right`} title="Right group" onClick={() => checkPhoto(it.id, GROUPS[g].id, GROUPS[g].id)}>✓ Right</button>}
         <GroupSelect it={it} value={g} onPick={(ng) => (check && !check.answered ? checkPhoto(it.id, GROUPS[g].id, ng) : fixGroup(it.id, ng))} />
@@ -41,7 +41,7 @@ function CleanTile({ it, g, p, why, onOpen, check, selectable }: { it: Item; g: 
 }
 
 /** Photos in the order given (most sure first), a few hundred at a time. */
-function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; why: keyof typeof WHY }[]; onOpen: (l: Item[], i: number) => void }) {
+function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; why: keyof typeof WHY; guess?: number }[]; onOpen: (l: Item[], i: number) => void }) {
   const [limit, setLimit] = useState(300);
   const sentinel = useRef<HTMLDivElement>(null);
   const items = useMemo(() => list.map((x) => x.it), [list]);
@@ -59,7 +59,7 @@ function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; w
   return (
     <div>
       <div className="grid">
-        {list.slice(0, limit).map((x, i) => <CleanTile key={x.it.id} it={x.it} g={x.g} p={x.p} why={x.why} onOpen={() => onOpen(items, i)} selectable />)}
+        {list.slice(0, limit).map((x, i) => <CleanTile key={x.it.id} it={x.it} g={x.g} p={x.p} why={x.why} guess={x.guess} onOpen={() => onOpen(items, i)} selectable />)}
       </div>
       {limit < list.length && <div className="more" ref={sentinel}>Loading more…</div>}
     </div>
@@ -139,7 +139,7 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
   useEffect(() => { stopSelecting(); }, [open]); // ticks belong to the group on screen
   const list = useMemo(() => {
     if (open == null) return [];
-    const out: { it: Item; g: number; p: number; why: 'ai' | 'name' | 'face' | 'you' }[] = [];
+    const out: { it: Item; g: number; p: number; why: Why; guess?: number }[] = [];
     for (const [id, pl] of st.placed) { const it = byId.get(id); if (it && pl.g === open) out.push({ it, ...pl }); }
     return out.sort((a, b) => b.p - a.p || (b.it.takenAt ?? '').localeCompare(a.it.takenAt ?? ''));
   }, [open, st.placed, st.v, byId]); // eslint-disable-line react-hooks/exhaustive-deps

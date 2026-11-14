@@ -17,7 +17,7 @@ export const CLIP_DTYPE = 'fp32' as const;
 /** Which AI made a fingerprint. Fingerprints from an older one are made again. 1 = the compressed copy. */
 export const FP_VERSION = 2;
 /** Change when the sentences change, so the sentence fingerprints are made again. */
-export const PROMPTS_VERSION = 1;
+export const PROMPTS_VERSION = 2;
 
 export type Side = 'junk' | 'call' | 'keep' | 'other' | 'whatsapp';
 export interface Group { id: string; name: string; side: Side; prompts: string[] }
@@ -51,11 +51,16 @@ export const GROUPS: Group[] = [
   ] },
   { id: 'lights', name: 'Lights and LEDs', side: 'keep', prompts: [
     'a photo of LED lights', 'a photo of an LED strip', 'a photo of car headlights', 'a photo of lamps lighting a room', 'a photo of car tail lights at night',
-    'a photo of ambient lighting in a car',
+    'a photo of ambient lighting in a car', 'a photo of a room lit by purple and pink LED light', 'a photo of a room with colored lighting',
+    'a photo of a space glowing with violet grow lights', 'a photo of walls lit by colored LED light',
   ] },
   { id: 'house', name: 'House work', side: 'keep', prompts: [
     'a photo of house renovation work', 'a photo of a construction site', 'a photo of a room being renovated', 'a photo of tiling work',
     'a photo of a wall being built', 'a photo of a roof under construction', 'a photo of plumbing work',
+  ] },
+  { id: 'thermal', name: 'Thermal camera', side: 'keep', prompts: [
+    'a thermal camera image', 'a thermal imaging picture with a temperature reading', 'an infrared heat map image in orange, yellow and purple',
+    'a thermal image of a wall showing heat loss', 'a thermal image of an electrical panel', 'a thermal image of a car engine', 'a FLIR thermal photo',
   ] },
   { id: 'food', name: 'Food', side: 'keep', prompts: [
     'a photo of food', 'a photo of a meal on a plate', 'a photo of a dish in a restaurant', 'a photo of cooking in a kitchen', 'a photo of a cake', 'a photo of drinks on a table',
@@ -63,6 +68,8 @@ export const GROUPS: Group[] = [
   { id: 'other', name: 'Everything else', side: 'other', prompts: [
     'a photo of a landscape', 'a photo of a car', 'a photo of an animal', 'a photo of a street', 'a photo of a building', 'a photo of flowers',
     'a photo of the sea', 'a photo of mountains', 'a photo of a city', 'a photo of a garden', 'a photo of a room', 'a photo of a tool', 'a photo of a sunset',
+    'a photo taken from an airplane window', 'an aerial view of city lights at night from a plane', 'a view of clouds and sky from a plane',
+    'a night photo of a city', 'a dark photo taken at night',
   ] },
   // Known from the file name or folder, not from the AI (so no sentences). Last, so the others keep their numbers.
   { id: 'whatsapp', name: 'WhatsApp', side: 'whatsapp', prompts: [] },
@@ -136,9 +143,9 @@ export function unitOf(k: ArrayLike<number>, dim = CLIP_DIM): Float32Array {
  * Scores n photos (fingerprints n × 512, whole numbers) against the groups. Returns each photo's best group and how
  * sure (0 to 1, the share of certainty that group gets), plus the runner-up.
  */
-export function scoreAll(k: Int8Array, n: number, bank: Bank, ex?: Examples, dim = CLIP_DIM): { g: Uint8Array; p: Float32Array; g2: Uint8Array } {
+export function scoreAll(k: Int8Array, n: number, bank: Bank, ex?: Examples, dim = CLIP_DIM): { g: Uint8Array; p: Float32Array; g2: Uint8Array; probs: Float32Array } {
   const G = GROUPS.length, P = bank.group.length;
-  const g = new Uint8Array(n), g2 = new Uint8Array(n), p = new Float32Array(n);
+  const g = new Uint8Array(n), g2 = new Uint8Array(n), p = new Float32Array(n), probs = new Float32Array(n * G);
   const f = new Float32Array(dim);
   const logit = new Float64Array(P), gl = new Float64Array(G), cache = new Float64Array(G);
   const tops: number[][] = Array.from({ length: G }, () => []);
@@ -181,12 +188,33 @@ export function scoreAll(k: Int8Array, n: number, bank: Bank, ex?: Examples, dim
     for (let q = 0; q < G; q++) if (q !== best && (second < 0 || gl[q] > gl[second])) second = q;
     g[i] = best; g2[i] = Math.max(0, second);
     p[i] = Math.exp(gl[best] - mx) / sum;
+    for (let q = 0; q < G; q++) probs[i * G + q] = Math.exp(gl[q] - mx) / sum;
   }
-  return { g, p, g2 };
+  return { g, p, g2, probs };
 }
 
-export type Why = 'ai' | 'name' | 'face' | 'you';
-export interface Placed { g: number; p: number; why: Why }
+/**
+ * The AI's choice for one photo from every group's share: the most likely group, leaving out Screenshots for a photo
+ * with camera information (a camera model or a GPS place), which a screenshot never has. How sure is counted among
+ * the groups left.
+ */
+export function choose(probs: ArrayLike<number>, camera: boolean): { g: number; p: number } {
+  const shots = GROUP_BY_ID.get('shots')!;
+  let best = -1, sum = 0;
+  for (let q = 0; q < probs.length; q++) {
+    if (camera && q === shots) continue;
+    sum += probs[q];
+    if (best < 0 || probs[q] > probs[best]) best = q;
+  }
+  return { g: Math.max(0, best), p: sum && best >= 0 ? probs[best] / sum : 0 };
+}
+
+export type Why = 'ai' | 'name' | 'face' | 'you' | 'unsure';
+/** `guess`: for 'unsure', the junk group the AI leaned to. */
+export interface Placed { g: number; p: number; why: Why; guess?: number }
+
+/** A junk group only gets photos the AI is at least this sure about; less sure ones go to Everything else. */
+export const JUNK_SURE = 0.5;
 
 /** How sure the AI must be that a photo with a face is junk (an ID card, a document with a photo) to keep it there. */
 export const FACE_JUNK_SURE = 0.8;
@@ -196,13 +224,15 @@ export const FACE_JUNK_SURE = 0.8;
  * itself; then a photo with a face goes to People, unless the AI is very sure it is a document, label, screen or
  * scan-tool screen (an ID card has a face too).
  */
-export function place(ai: { g: number; p: number } | undefined, o: { fix?: number; whatsapp?: boolean; screenshot?: boolean; face?: boolean }): Placed | undefined {
+export function place(ai: { g: number; p: number; probs?: ArrayLike<number> } | undefined, o: { fix?: number; whatsapp?: boolean; screenshot?: boolean; face?: boolean; camera?: boolean }): Placed | undefined {
   if (o.fix != null) return { g: o.fix, p: 1, why: 'you' };
   if (o.whatsapp) return { g: GROUP_BY_ID.get('whatsapp')!, p: 1, why: 'name' };
   if (o.screenshot) return { g: GROUP_BY_ID.get('shots')!, p: 1, why: 'name' };
   if (!ai) return undefined;
-  const side = GROUPS[ai.g].side;
-  const sureJunk = (side === 'junk' || side === 'call') && ai.p >= FACE_JUNK_SURE;
-  if (o.face && !sureJunk && GROUPS[ai.g].id !== 'people') return { g: GROUP_BY_ID.get('people')!, p: Math.max(side === 'keep' || side === 'other' ? ai.p : 0, 0.9), why: 'face' };
-  return { g: ai.g, p: ai.p, why: 'ai' };
+  const c = ai.probs ? choose(ai.probs, !!o.camera) : { g: ai.g, p: ai.p };
+  const side = GROUPS[c.g].side;
+  const sureJunk = (side === 'junk' || side === 'call') && c.p >= FACE_JUNK_SURE;
+  if (o.face && !sureJunk && GROUPS[c.g].id !== 'people') return { g: GROUP_BY_ID.get('people')!, p: Math.max(side === 'keep' || side === 'other' ? c.p : 0, 0.9), why: 'face' };
+  if (side === 'junk' && c.p < JUNK_SURE) return { g: GROUP_BY_ID.get('other')!, p: c.p, why: 'unsure', guess: c.g };
+  return { g: c.g, p: c.p, why: 'ai' };
 }
