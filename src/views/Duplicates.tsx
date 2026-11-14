@@ -72,7 +72,8 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
   const inView = (gs: Item[][]) => gs.map((g) => g.filter((x) => shownIds.has(x.id))).filter((g) => g.length > 1);
   const exact = useMemo(() => exactDuplicates(items), [items]);
   // WhatsApp copies of videos; a copy that is also an identical file of another is already in that tab.
-  const videos = useMemo(() => { const inExact = new Set(exact.flatMap((g) => g.slice(1).map((x) => x.id))); return whatsAppVideoCopies(items.filter((x) => !inExact.has(x.id)), pathOf).sort(newest); }, [items, exact, pathOf]);
+  // Always from all photos and videos: the filters at the top (like "Photos") would leave the videos out.
+  const videos = useMemo(() => { const inExact = new Set(exactDuplicates(all).flatMap((g) => g.slice(1).map((x) => x.id))); return whatsAppVideoCopies(all.filter((x) => !inExact.has(x.id)), pathOf).sort(newest); }, [all, pathOf]);
   const same = useMemo(() => inView(similar.same).sort(newest), [similar.same, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
   const alikeGroups = useMemo(() => inView(lookAlikes(similar.pairs, alike / 100).map((g) => g.map((i) => similar.byIndex[i]).sort((a, b) => (a.takenAt ?? '').localeCompare(b.takenAt ?? '')))).sort(newest), [similar.pairs, similar.byIndex, alike, shownIds]); // eslint-disable-line react-hooks/exhaustive-deps
   // Google Photos items whose size isn't known yet also show 0 bytes, so they never count as empty.
@@ -135,6 +136,13 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
     setChanged((m) => { const n = new Map(m); g.forEach((x) => n.set(x.id, x !== best)); return n; });
   };
 
+  // "Mark all extra copies": in every set, all but the copy kept (look-alikes: all but the sharpest).
+  const keeperShown = (g: Item[]) => (tab === 'alike' ? g.reduce((a, b) => ((rec(b)?.sh ?? 0) > (rec(a)?.sh ?? 0) ? b : a)) : keeperOf(g));
+  const markAll = (on: boolean) => setChanged((m) => {
+    const n = new Map(m);
+    for (const g of groups) { const keep = tab === 'empty' ? undefined : keeperShown(g); g.forEach((x) => canRemove(x) && n.set(x.id, on && x !== keep)); }
+    return n;
+  });
   const chosen = groups.flatMap((g) => g.filter(isOut));
   const space = chosen.reduce((s, x) => s + x.size, 0);
   const [limit, setLimit] = useState(60);
@@ -176,7 +184,7 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
         {groups.some((g) => g.some((x) => x.gp)) && <p className="muted" style={{ margin: 0 }}>Google Photos copies can be removed too: they go to Google Photos' Trash (restorable for 60 days). The app only suggests removing a Google Photos copy when the copy it keeps is also in Google Photos; otherwise click it yourself.</p>}
         {(keptCount > 0 || showKept) && <label className="row muted"><input type="checkbox" checked={showKept} onChange={(e) => { setShowKept(e.target.checked); setLimit(60); }} /> Show only the {keptCount.toLocaleString()} {keptCount === 1 ? 'set' : 'sets'} you kept as they are</label>}
         {lastKept && !showKept && <div className="row"><span>Kept {lastKept.length === 2 ? 'both' : `all ${lastKept.length}`}: not shown as duplicates again.</span><button className="btn small" onClick={async () => { await forgetKept(lastKept); setLastKept(null); }}>Undo</button></div>}
-        {!showKept && groups.some((g) => g.some(canRemove)) && <div className="row"><button className="btn danger" disabled={!chosen.length} onClick={() => onTrash(chosen)}>Move {chosen.length.toLocaleString()} marked {chosen.length === 1 ? 'copy' : 'copies'} to the trash…</button><span className="muted">You'll see them and where they go before anything moves.</span></div>}
+        {!showKept && groups.some((g) => g.some(canRemove)) && <div className="row"><button className="btn danger" disabled={!chosen.length} onClick={() => onTrash(chosen)}>Move {chosen.length.toLocaleString()} marked {chosen.length === 1 ? 'copy' : 'copies'} to the trash…</button><button className="btn" onClick={() => markAll(true)}>{tab === 'empty' ? 'Mark all' : tab === 'alike' ? 'Mark all but the sharpest in each set' : 'Mark all extra copies'}</button>{chosen.length > 0 && <button className="btn" onClick={() => markAll(false)}>Unmark all</button>}<span className="muted">You'll see them and where they go before anything moves.</span></div>}
       </div>
       {!groups.length && <p className="muted">{tab === 'exact' ? 'No identical files found.' : tab === 'same' ? (similar.compared ? 'No other copies of the same photo found so far.' : 'Compare the pictures first.') : tab === 'video' ? 'No WhatsApp copies of your videos found.' : tab === 'alike' ? (similar.compared ? 'No look-alikes at this setting.' : 'Compare the pictures first.') : ''}</p>}
       {groups.slice(0, limit).map((g0) => {
