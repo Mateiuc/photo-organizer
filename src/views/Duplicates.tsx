@@ -128,7 +128,6 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
   const isOut = (x: Item) => !showKept && canRemove(x) && (changed.get(x.id) ?? suggested.has(x.id));
   const toggle = (x: Item, g: Item[]) => {
     const next = !isOut(x);
-    if (next && tab !== 'empty' && g.filter((y) => y !== x).every(isOut)) return; // always keep at least one copy
     setChanged((m) => new Map(m).set(x.id, next));
   };
   const keepSharpest = (g: Item[]) => {
@@ -136,11 +135,12 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
     setChanged((m) => { const n = new Map(m); g.forEach((x) => n.set(x.id, x !== best)); return n; });
   };
 
-  // "Mark all extra copies": in every set, all but the copy kept (look-alikes: all but the sharpest).
+  // The copy the app suggests keeping in each set (look-alikes: the sharpest).
   const keeperShown = (g: Item[]) => (tab === 'alike' ? g.reduce((a, b) => ((rec(b)?.sh ?? 0) > (rec(a)?.sh ?? 0) ? b : a)) : keeperOf(g));
+  // "Select all": every file of every set marked, the suggested best one too. You then click Keep on the ones to save.
   const markAll = (on: boolean) => setChanged((m) => {
     const n = new Map(m);
-    for (const g of groups) { const keep = tab === 'empty' ? undefined : keeperShown(g); g.forEach((x) => canRemove(x) && n.set(x.id, on && x !== keep)); }
+    for (const g of groups) g.forEach((x) => canRemove(x) && n.set(x.id, on));
     return n;
   });
   const chosen = groups.flatMap((g) => g.filter(isOut));
@@ -184,13 +184,12 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
         {groups.some((g) => g.some((x) => x.gp)) && <p className="muted" style={{ margin: 0 }}>Google Photos copies can be removed too: they go to Google Photos' Trash (restorable for 60 days). The app only suggests removing a Google Photos copy when the copy it keeps is also in Google Photos; otherwise click it yourself.</p>}
         {(keptCount > 0 || showKept) && <label className="row muted"><input type="checkbox" checked={showKept} onChange={(e) => { setShowKept(e.target.checked); setLimit(60); }} /> Show only the {keptCount.toLocaleString()} {keptCount === 1 ? 'set' : 'sets'} you kept as they are</label>}
         {lastKept && !showKept && <div className="row"><span>Kept {lastKept.length === 2 ? 'both' : `all ${lastKept.length}`}: not shown as duplicates again.</span><button className="btn small" onClick={async () => { await forgetKept(lastKept); setLastKept(null); }}>Undo</button></div>}
-        {!showKept && groups.some((g) => g.some(canRemove)) && <div className="row"><button className="btn danger" disabled={!chosen.length} onClick={() => onTrash(chosen)}>Move {chosen.length.toLocaleString()} marked {chosen.length === 1 ? 'copy' : 'copies'} to the trash…</button><button className="btn" onClick={() => markAll(true)}>{tab === 'empty' ? 'Mark all' : tab === 'alike' ? 'Mark all but the sharpest in each set' : 'Mark all extra copies'}</button>{chosen.length > 0 && <button className="btn" onClick={() => markAll(false)}>Unmark all</button>}<span className="muted">You'll see them and where they go before anything moves.</span></div>}
+        {!showKept && groups.some((g) => g.some(canRemove)) && <div className="row"><button className="btn danger" disabled={!chosen.length} onClick={() => onTrash(chosen)}>Move {chosen.length.toLocaleString()} marked {chosen.length === 1 ? 'copy' : 'copies'} to the trash…</button><button className="btn" onClick={() => markAll(true)}>Select all for remove</button>{chosen.length > 0 && <button className="btn" onClick={() => markAll(false)}>Unselect all</button>}<span className="muted">“★ Best to keep” shows the copy the app would keep; click ✓ Keep on the ones you want. You'll see the list before anything moves.</span></div>}
       </div>
       {!groups.length && <p className="muted">{tab === 'exact' ? 'No identical files found.' : tab === 'same' ? (similar.compared ? 'No other copies of the same photo found so far.' : 'Compare the pictures first.') : tab === 'video' ? 'No WhatsApp copies of your videos found.' : tab === 'alike' ? (similar.compared ? 'No look-alikes at this setting.' : 'Compare the pictures first.') : ''}</p>}
       {groups.slice(0, limit).map((g0) => {
         const keep = keeperOf(g0);
         const g = tab === 'exact' || tab === 'same' || tab === 'video' ? [keep, ...g0.filter((x) => x !== keep)] : g0; // the copy kept comes first
-        const sharpest = tab === 'alike' ? g.reduce((a, b) => ((rec(b)?.sh ?? 0) > (rec(a)?.sh ?? 0) ? b : a)) : undefined;
         return (
           <section className="dup" key={g0.map((x) => x.id).join('|')}>
             <div className="row">
@@ -203,14 +202,14 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
             <div className="grid">
               {g.map((x) => {
                 const out = isOut(x);
-                const last = tab !== 'empty' && !out && g.filter((y) => y !== x).every(isOut);
-                const note = tab === 'same' && edited(x, keep) ? 'colours differ: an edit?' : x === sharpest ? 'sharpest' : undefined;
+                const best = tab !== 'empty' && x === keeperShown(g);
+                const note = tab === 'same' && edited(x, keep) ? 'colours differ: an edit?' : best ? (tab === 'alike' ? '★ Best to keep (sharpest)' : '★ Best to keep') : undefined;
                 return (
                   <div className={`dcard ${out ? 'extra' : 'keep'}`} key={x.id}>
                     <button className="tile" style={{ borderRadius: 0 }} onClick={() => onOpen(g, g.indexOf(x))}><Preview item={x} /></button>
                     <div className="meta">
                       {canRemove(x)
-                        ? <button className={`pick ${out ? 'extra' : 'keep'}`} disabled={last} title={last ? 'At least one copy is always kept' : undefined} onClick={() => toggle(x, g)}>{out ? '✕ Remove' : '✓ Keep'}</button>
+                        ? <button className={`pick ${out ? 'extra' : 'keep'}`} onClick={() => toggle(x, g)}>{out ? '✕ Remove' : '✓ Keep'}</button>
                         : <span className="pick keep" title="Open your photos first (Choose photos) to remove copies">✓ Keep</span>}
                       <Details x={x} pathOf={pathOf} why={reason(x, keep)} note={note} dims={dims(x)} />
                     </div>
