@@ -318,7 +318,7 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
     const fixes = [...state.fixes].filter(([id, g]) => state.learned.get(id) === g && fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
     const ex: Examples = { emb: new Float32Array(fixes.length * CLIP_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
     fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * CLIP_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
-    let ai: { g: Uint8Array; p: Float32Array } = { g: new Uint8Array(0), p: new Float32Array(0) };
+    let ai: { g: Uint8Array; p: Float32Array; probs: Float32Array } = { g: new Uint8Array(0), p: new Float32Array(0), probs: new Float32Array(0) };
     if (b && withK.length) {
       scorer ??= new Worker(new URL('./score.worker.ts', import.meta.url), { type: 'module' });
       const id = ++scoreSeq;
@@ -338,7 +338,9 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
       if (!sortable(it) && !(it.kind === 'video' && viaWhatsApp(it, pathOf))) continue; // WhatsApp videos join the WhatsApp group
       const i = at.get(it.id);
       const fix = state.fixes.get(it.id);
-      const r = place(i != null ? { g: ai.g[i], p: ai.p[i] } : undefined, { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face: faces.has(it.id) });
+      const G = GROUPS.length;
+      const r = place(i != null ? { g: ai.g[i], p: ai.p[i], probs: ai.probs.subarray(i * G, (i + 1) * G) } : undefined,
+        { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face: faces.has(it.id), camera: !!it.camera || it.lat != null });
       if (r) placed.set(it.id, r);
     }
     state.placed = placed;
