@@ -1,4 +1,4 @@
-// "Clean up": looks at each photo once with the CLIP AI and keeps its fingerprint (512 numbers) in this browser and in
+// "Clean up": looks at each photo once with the SigLIP 2 AI and keeps its fingerprint (768 numbers) in this browser and in
 // the backup. From the fingerprints, every photo is put in a group (Documents, Screenshots, People, Food…), and your
 // fixes teach it. Everything runs on this computer: no photo is sent anywhere. Nothing here deletes anything.
 import { useEffect, useState } from 'react';
@@ -11,7 +11,7 @@ import { hasFile } from '../local/fs';
 import { quantize } from '../pictures/compare';
 import { viaWhatsApp, whatsAppName } from '../lib/model';
 import { ready as facesReady } from '../faces/people';
-import { CLIP_DIM, CLIP_DTYPE, CLIP_MODEL, FP_VERSION, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, promptList, PROMPTS_VERSION, unitOf, type Bank, type Examples, type Placed } from './groups';
+import { AI_DIM, AI_DTYPE, AI_MODEL, AI_REVISION, FP_VERSION, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, OLD_AI_MODEL, promptList, PROMPTS_VERSION, unitOf, type Bank, type Examples, type Placed } from './groups';
 
 /**
  * What the app keeps about one photo. `x` = the picture couldn't be read; `b` = which backup file holds it; `v` = which
@@ -82,12 +82,12 @@ async function load() {
 async function changedAi(d: IDBPDatabase) {
   state.checks.clear();
   await d.put('kv', [], 'checks');
-  await d.delete('kv', `bank:${CLIP_MODEL}:${PROMPTS_VERSION}`);
   await d.put('kv', FP_VERSION, 'fp');
   sortChanges.edits++;
   try {
+    for (const key of await d.getAllKeys('kv')) if (typeof key === 'string' && key.startsWith('bank:')) await d.delete('kv', key);
     const c = await caches.open('transformers-cache');
-    for (const req of await c.keys()) if (req.url.includes(CLIP_MODEL) && /_quantized\.onnx/.test(req.url)) await c.delete(req);
+    for (const req of await c.keys()) if (req.url.includes(OLD_AI_MODEL)) await c.delete(req);
   } catch { /* no cache here: nothing to free */ }
 }
 
@@ -136,7 +136,7 @@ function call<T>(cw: ClipWorker, msg: Record<string, unknown>, transfer: Transfe
 }
 
 function startOne(onProgress?: (file: string, loaded: number, total: number) => void): Promise<ClipWorker> {
-  const w = new Worker(new URL('./clip.worker.ts', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
   return new Promise((resolve, reject) => {
     const on = (e: MessageEvent) => {
       const m = e.data;
@@ -146,7 +146,7 @@ function startOne(onProgress?: (file: string, loaded: number, total: number) => 
     };
     w.addEventListener('message', on);
     w.addEventListener('error', (e) => { w.terminate(); reject(new Error(e.message || 'The AI couldn’t start in this browser.')); });
-    w.postMessage({ op: 'init', base: base(), model: CLIP_MODEL, dtype: CLIP_DTYPE });
+    w.postMessage({ op: 'init', base: base(), model: AI_MODEL, revision: AI_REVISION, dtype: AI_DTYPE });
   });
 }
 
@@ -162,7 +162,7 @@ function startWorkers(): Promise<ClipWorker[]> {
       state.run.model = { loaded: l, total: t };
       notify();
     });
-    // Each extra worker holds its own copy of the AI (about 350 MB of memory), so only on computers that have room.
+    // Each extra worker holds its own copy of the AI (about 400 MB of memory), so only on computers that have room.
     const nav = typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }) : undefined;
     const cores = nav?.hardwareConcurrency || 2, mem = nav?.deviceMemory ?? 8;
     const extra = Math.min(cores >= 6 ? 2 : cores >= 4 ? 1 : 0, mem >= 8 ? 2 : mem >= 4 ? 1 : 0);
@@ -174,17 +174,13 @@ function startWorkers(): Promise<ClipWorker[]> {
 }
 
 let bank: Bank | null = null;
-/** The sentence fingerprints, made once and kept. */
+/** The sentence fingerprints. They come with the app, made ahead with the full-size AI (see scripts/sentences.mjs). */
 async function getBank(): Promise<Bank> {
   if (bank) return bank;
-  const d = await db();
-  const key = `bank:${CLIP_MODEL}:${CLIP_DTYPE}:${PROMPTS_VERSION}`;
-  const saved: Float32Array | undefined = await d.get('kv', key);
-  const prompts = promptList();
-  if (saved && saved.length === prompts.length * CLIP_DIM) return (bank = makeBank(saved));
-  const [first] = await startWorkers();
-  const { emb } = await call<{ emb: Float32Array }>(first, { op: 'text', prompts: prompts.map((p) => p.text) });
-  await d.put('kv', emb, key);
+  const res = await fetch(`${base()}ai/sentences-${PROMPTS_VERSION}.bin`);
+  if (!res.ok) throw new Error('The app couldn’t load its group sentences. Reload the page.');
+  const emb = new Float32Array(await res.arrayBuffer());
+  if (emb.length !== promptList().length * AI_DIM) throw new Error('The app’s group sentences don’t match this version. Reload the page.');
   return (bank = makeBank(emb));
 }
 
@@ -312,12 +308,12 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
   state.scoring = true; notify();
   try {
     const b = withK.length ? await getBank() : null;
-    const k = new Int8Array(withK.length * CLIP_DIM);
-    withK.forEach((it, i) => k.set(state.recs.get(it.id)!.k!, i * CLIP_DIM));
+    const k = new Int8Array(withK.length * AI_DIM);
+    withK.forEach((it, i) => k.set(state.recs.get(it.id)!.k!, i * AI_DIM));
     // your newest fixes that it was asked to learn from, as examples
     const fixes = [...state.fixes].filter(([id, g]) => state.learned.get(id) === g && fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
-    const ex: Examples = { emb: new Float32Array(fixes.length * CLIP_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
-    fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * CLIP_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
+    const ex: Examples = { emb: new Float32Array(fixes.length * AI_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
+    fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * AI_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
     let ai: { g: Uint8Array; p: Float32Array; probs: Float32Array } = { g: new Uint8Array(0), p: new Float32Array(0), probs: new Float32Array(0) };
     if (b && withK.length) {
       scorer ??= new Worker(new URL('./score.worker.ts', import.meta.url), { type: 'module' });

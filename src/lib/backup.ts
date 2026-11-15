@@ -9,7 +9,7 @@
 //   faces-0001.json …      the faces themselves (fingerprint and small picture). Written once, never changed.
 //   pictures-0001.json …   what "Compare pictures" learned about each photo's picture. Written once, never changed.
 //   topics.json            search topics (like "Cars") and the photos each one found
-//   sort-0001.json …       what the Clean-up AI (CLIP) saw in each photo. Written once, never changed.
+//   sort-0001.json …       what the Clean-up AI saw in each photo. Written once, never changed.
 //   cleanup.json           your fixes and checks on the Clean-up page
 //   kept.json              duplicate sets you said to keep as they are ("Keep both")
 //   newfaces-0001.json …   while the photos are read again with the stronger face AI: the faces found so far

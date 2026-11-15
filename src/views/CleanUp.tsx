@@ -1,4 +1,4 @@
-// Clean up: the CLIP AI sorts every photo into Junk and Keep groups. Open a group, tick its photos (all, or only the
+// Clean up: the SigLIP 2 AI sorts every photo into Junk and Keep groups. Open a group, tick its photos (all, or only the
 // sure ones) and use the bottom bar: Move to trash (after a confirm window, with Undo) or Move to group.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { setTicked, startSelecting, stopSelecting, useShownList, useTickedOf } from '../lib/selection';
@@ -170,8 +170,8 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
     <div className="stack" style={{ maxWidth: 'none' }}>
       <div className="panel">
         <p className="muted" style={{ margin: 0 }}>
-          The app sorts your photos into groups with an AI that understands pictures and words together (CLIP, from OpenAI). It runs on this computer: no photo is sent anywhere.
-          The AI is downloaded once (about 600 MB) and the browser keeps it. Sorting deletes nothing. To clean up, open a group, tick its photos and use the bar at the bottom: <b>Move to trash</b> asks you first and can be undone, <b>Move to group</b> puts them in another group.
+          The app sorts your photos into groups with an AI that understands pictures and words together (SigLIP 2, from Google). It runs on this computer: no photo is sent anywhere.
+          The AI is downloaded once (about 370 MB) and the browser keeps it. Sorting deletes nothing. To clean up, open a group, tick its photos and use the bar at the bottom: <b>Move to trash</b> asks you first and can be undone, <b>Move to group</b> puts them in another group.
         </p>
         {r.running ? (
           <>

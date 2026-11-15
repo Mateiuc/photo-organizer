@@ -179,7 +179,7 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
         ) : (
           <>
             <p className="muted">Photos taken close together (within a day) that look very alike: bursts, retakes, a cropped copy. They are <b>different photos</b>, so nothing is marked: open them, pick the ones to remove, or use “Keep only the sharpest”. Move the slider to the left to find more sets that are less alike, or to the right for only very close ones.</p>
-            <p className="muted" style={{ margin: 0 }}>{similar.withClip ? `${similar.withClip.toLocaleString()} of ${similar.compared.toLocaleString()} photos are compared with the stronger CLIP AI (from Clean up); the rest with the basic one.` : 'Photos are compared with the basic AI. Photos you sort in Clean up are compared with its stronger CLIP AI.'}</p>
+            <p className="muted" style={{ margin: 0 }}>{similar.withClip ? `${similar.withClip.toLocaleString()} of ${similar.compared.toLocaleString()} photos are compared with the stronger AI from Clean up; the rest with the basic one.` : 'Photos are compared with the basic AI. Photos you sort in Clean up are compared with its stronger AI.'}</p>
             <label className="row slider">How alike: <input type="range" min={80} max={98} step={1} value={alike} onChange={(e) => { const v = Number(e.target.value); setAlike(v); try { localStorage.setItem('po.alike', String(v)); } catch { /* only a convenience */ } }} /> <b>{alike}%</b></label>
           </>
         )}

@@ -163,8 +163,8 @@ export interface Packed {
   hasClip: Uint8Array; // 1 when the photo has a CLIP fingerprint
 }
 
-/** Size of a CLIP fingerprint (the same as CLIP_DIM in sort/groups). */
-export const CLIP_LEN = 512;
+/** Size of a Clean-up AI fingerprint (the same as AI_DIM in sort/groups; the name is from the first AI used, CLIP). */
+export const CLIP_LEN = 768;
 
 export const SAME = { hamming: 8, corr: 0.94, flatHamming: 4, flatCorr: 0.98, flat: 10, blank: 3, shape: 0.03 };
 
