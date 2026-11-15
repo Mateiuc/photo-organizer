@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Item } from '../lib/model';
 import { helperVersion, OLD_HELPER, older, SEARCH_VERSION } from '../gphotos/bridge';
-import { comparable, comparePictures, stopComparing, usePictures } from '../pictures/store';
+import { comparable, usePictures } from '../pictures/store';
+import { comparePictures, stopReading } from '../read/reader';
 import { clearLearning, deleteTopic, editTopic, markTopic, marksSig, members, parseQueries, PRESETS, runTopic, saveTopic, searchOnce, stopSearch, SURE, tuneTopic, useTopics, type Topic } from '../search/topics';
 import { learnTopic, withFingerprint } from '../search/teach';
 import { MonthGrid, Thumb } from './Grid';
@@ -188,7 +189,7 @@ function TopicView({ t, all, shownIds, byKey, gp, onOpen, onClose, onSetup }: { 
         {notLooked > 0 && (
           <p className="muted small" style={{ margin: 0 }}>
             The app has looked at {looked.toLocaleString()} of {canLook.length.toLocaleString()} photos; learning searches only those. {pics.run.running
-              ? <>Looking now: {pics.run.done.toLocaleString()} of {pics.run.total.toLocaleString()}. <button className="link" onClick={stopComparing}>Pause</button></>
+              ? <>Looking now: {pics.run.done.toLocaleString()} of {pics.run.total.toLocaleString()}. <button className="link" onClick={stopReading}>Pause</button></>
               : <><button className="link" onClick={() => comparePictures(all)}>Look at the other {notLooked.toLocaleString()}</button> (the same step as Compare pictures in Duplicates; it can be paused). Photos in a folder on this computer can only be looked at while their folder is open.</>}
           </p>
         )}

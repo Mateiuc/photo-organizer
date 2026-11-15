@@ -3,6 +3,8 @@ import { localFull } from '../local/thumbs';
 import { fmtDuration, fmtSize, thumbUrl, type Item } from '../lib/model';
 import { details, type GpDetails } from '../gphotos/api';
 import { GpPicture } from './Grid';
+import { InfoCard } from './InfoCard';
+import type { Similar } from '../pictures/groups';
 import { TopicMarks } from './Search';
 
 /** A Google Photos video plays from Google's own link; if the browser can't play it, the picture is shown. */
@@ -13,7 +15,7 @@ function GpVideo({ it }: { it: Item }) {
   return <video key={it.id} src={it.thumb.replace(/=[a-z0-9-]+$/i, '') + '=dv'} poster={thumbUrl(it, 1600)} controls autoPlay style={{ maxWidth: '100%', maxHeight: '100%' }} onError={() => setBad(true)} />;
 }
 
-export function Viewer({ list, index, setIndex, pathOf, onClose }: { list: Item[]; index: number; setIndex: (i: number) => void; pathOf: (id?: string) => string; onClose: () => void }) {
+export function Viewer({ list, index, setIndex, pathOf, onClose, exact, similar }: { list: Item[]; index: number; setIndex: (i: number) => void; pathOf: (id?: string) => string; onClose: () => void; exact: Item[][]; similar: Similar }) {
   const it = list[index];
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -74,6 +76,7 @@ export function Viewer({ list, index, setIndex, pathOf, onClose }: { list: Item[
           {more?.description && <><dt>Description</dt><dd>{more.description}</dd></>}
           <dt>Type</dt><dd>{it.kind}</dd>
         </dl>
+        <InfoCard it={it} pathOf={pathOf} exact={exact} similar={similar} />
         <TopicMarks it={it} />
         {it.gp && !more && <div style={{ color: '#8d97a8' }}>Reading more details from Google Photos…</div>}
         {it.link && <a href={it.link} target="_blank" rel="noopener">{it.gp ? 'Open in Google Photos ↗' : 'Open in Google Drive ↗'}</a>}

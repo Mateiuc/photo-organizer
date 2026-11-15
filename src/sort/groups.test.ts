@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import { createHash } from 'node:crypto';
+import sentences from './sentences.json';
 import { describe, expect, it } from 'vitest';
-import { choose, CLIP_DIM, GROUP_BY_ID, GROUPS, JUNK_SURE, makeBank, place, promptList, scoreAll, unitOf, type Examples } from './groups';
+import { choose, AI_DIM, PROMPTS_VERSION, GROUP_BY_ID, GROUPS, JUNK_SURE, makeBank, place, promptList, scoreAll, unitOf, type Examples } from './groups';
 import { quantize } from '../pictures/compare';
 
 // Stand-in fingerprints: each group points in its own direction, each sentence a little to the side of it.
@@ -8,13 +11,13 @@ const r = rnd(3);
 // Directions at right angles to each other (Gram–Schmidt), so random overlaps don't blur the test.
 const made: Float32Array[] = [];
 const randUnit = () => {
-  const v = Float32Array.from({ length: CLIP_DIM }, () => r());
-  for (const u of made) { let c = 0; for (let d = 0; d < CLIP_DIM; d++) c += v[d] * u[d]; for (let d = 0; d < CLIP_DIM; d++) v[d] -= c * u[d]; }
+  const v = Float32Array.from({ length: AI_DIM }, () => r());
+  for (const u of made) { let c = 0; for (let d = 0; d < AI_DIM; d++) c += v[d] * u[d]; for (let d = 0; d < AI_DIM; d++) v[d] -= c * u[d]; }
   const out = unitOf(v);
   made.push(out);
   return out;
 };
-const mixv = (parts: [number, Float32Array][]) => { const v = new Float32Array(CLIP_DIM); for (const [w, x] of parts) for (let d = 0; d < CLIP_DIM; d++) v[d] += w * x[d]; return v; };
+const mixv = (parts: [number, Float32Array][]) => { const v = new Float32Array(AI_DIM); for (const [w, x] of parts) for (let d = 0; d < AI_DIM; d++) v[d] += w * x[d]; return v; };
 // Built to behave like real CLIP: pictures share an "it's a picture" part and sentences an "it's a sentence" part,
 // so a picture and its best sentence are only a little alike (cosine about 0.25, the others about 0.16), pictures of
 // the same kind are very alike, and unrelated pictures about 0.55.
@@ -23,15 +26,15 @@ const cTxt = unitOf(mixv([[0.25, cImg], [0.97, randUnit()]]));
 const imgDir = GROUPS.map(() => randUnit());
 const txtDir = imgDir.map((d) => unitOf(mixv([[0.3, d], [0.95, randUnit()]])));
 const prompts = promptList();
-const textEmb = new Float32Array(prompts.length * CLIP_DIM);
-prompts.forEach((p, i) => textEmb.set(unitOf(mixv([[0.85, cTxt], [0.5, txtDir[p.g]], [0.05, randUnit()]])), i * CLIP_DIM));
+const textEmb = new Float32Array(prompts.length * AI_DIM);
+prompts.forEach((p, i) => textEmb.set(unitOf(mixv([[0.85, cTxt], [0.5, txtDir[p.g]], [0.05, randUnit()]])), i * AI_DIM));
 const bank = makeBank(textEmb);
 /** A photo looking like a mix of groups. */
 const photo = (mix: Record<string, number>) => {
   const g = unitOf(mixv(Object.entries(mix).map(([id, w]) => [w, imgDir[GROUP_BY_ID.get(id)!]] as [number, Float32Array])));
   return quantize(unitOf(mixv([[0.75, cImg], [0.65, g], [0.03, randUnit()]])));
 };
-const pack = (ps: Int8Array[]) => { const k = new Int8Array(ps.length * CLIP_DIM); ps.forEach((p, i) => k.set(p, i * CLIP_DIM)); return k; };
+const pack = (ps: Int8Array[]) => { const k = new Int8Array(ps.length * AI_DIM); ps.forEach((p, i) => k.set(p, i * AI_DIM)); return k; };
 
 describe('clean-up groups', () => {
   it('every group the AI picks from has sentences, and each weighs the same in total', () => {
@@ -60,8 +63,8 @@ describe('clean-up groups', () => {
     expect(GROUPS[before.g[0]].id).toBe('labels');
     expect(before.p[0]).toBeGreaterThan(0.5);
     const fixes = [looks(), looks(), looks()];
-    const ex: Examples = { emb: new Float32Array(fixes.length * CLIP_DIM), group: new Uint8Array(fixes.length).fill(GROUP_BY_ID.get('docs')!), n: fixes.length };
-    fixes.forEach((f, i) => ex.emb.set(unitOf(f), i * CLIP_DIM));
+    const ex: Examples = { emb: new Float32Array(fixes.length * AI_DIM), group: new Uint8Array(fixes.length).fill(GROUP_BY_ID.get('docs')!), n: fixes.length };
+    fixes.forEach((f, i) => ex.emb.set(unitOf(f), i * AI_DIM));
     const after = scoreAll(pack([looks(), photo({ food: 1 })]), 2, bank, ex);
     expect(GROUPS[after.g[0]].id).toBe('docs');
     expect(GROUPS[after.g[1]].id).toBe('food'); // a photo that looks nothing like them stays where it was
@@ -108,9 +111,30 @@ describe('camera photos and unsure guesses', () => {
     // a screenshot known from its file name stays a screenshot
     expect(place(undefined, { screenshot: true, camera: true })).toMatchObject({ g: id('shots'), why: 'name' });
   });
+  it('a photo the AI calls a document, label or screen photo, but whose tags show something worth keeping, goes to Everything else as mixed', () => {
+    const sure = probs({ docs: 0.97, other: 0.03 });
+    expect(place({ g: id('docs'), p: 0.97, probs: sure }, {})).toMatchObject({ g: id('docs'), why: 'ai' });
+    expect(place({ g: id('docs'), p: 0.97, probs: sure }, { keepSign: true })).toEqual({ g: id('other'), p: expect.closeTo(0.97, 5), why: 'mixed', guess: id('docs') });
+    for (const g of ['labels', 'screens']) expect(place({ g: id(g), p: 0.9, probs: probs({ [g]: 0.9, other: 0.1 }) }, { keepSign: true })).toMatchObject({ g: id('other'), why: 'mixed', guess: id(g) });
+    // a screenshot of a photo of people is still a screenshot
+    expect(place({ g: id('shots'), p: 0.9, probs: probs({ shots: 0.9, other: 0.1 }) }, { keepSign: true })).toMatchObject({ g: id('shots'), why: 'ai' });
+    // keep groups, scan-tool screens (your call) and your own fixes are not touched
+    expect(place({ g: id('wires'), p: 0.9, probs: probs({ wires: 0.9, other: 0.1 }) }, { keepSign: true })).toMatchObject({ g: id('wires'), why: 'ai' });
+    expect(place({ g: id('scantool'), p: 0.9, probs: probs({ scantool: 0.9, other: 0.1 }) }, { keepSign: true })).toMatchObject({ g: id('scantool'), why: 'ai' });
+    expect(place({ g: id('docs'), p: 0.97, probs: sure }, { keepSign: true, fix: id('docs') })).toMatchObject({ g: id('docs'), why: 'you' });
+  });
   it('has a Thermal camera group on the keep side, and colored rooms and plane views have sentences', () => {
     expect(GROUPS[id('thermal')].side).toBe('keep');
     expect(GROUPS[id('lights')].prompts.some((p) => p.includes('colored lighting'))).toBe(true);
     expect(GROUPS[id('other')].prompts.some((p) => p.includes('airplane window'))).toBe(true);
+  });
+});
+
+describe('the sentence fingerprints that come with the app', () => {
+  it('were made from the sentences as they are now (else run `npm run sentences`)', () => {
+    const texts = promptList().map((p) => p.text);
+    expect(sentences.hash).toBe(createHash('sha256').update(JSON.stringify(texts)).digest('hex'));
+    expect(sentences.version).toBe(PROMPTS_VERSION);
+    expect(fs.statSync(`public/ai/sentences-${PROMPTS_VERSION}.bin`).size).toBe(texts.length * AI_DIM * 4);
   });
 });

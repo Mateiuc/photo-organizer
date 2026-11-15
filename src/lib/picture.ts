@@ -1,5 +1,5 @@
 // Reads one photo as a small picture, from wherever it lives: a folder on this computer, Google Drive, or Google
-// Photos (through the helper add-on). Used by the face search and by the picture comparison.
+// Photos (through the helper add-on). Used by the face search and by the one read for Duplicates and Clean up.
 import { downloadFile } from '../drive/api';
 import { ask } from '../gphotos/bridge';
 import { getLocalFile } from '../local/fs';
@@ -49,4 +49,34 @@ export async function loadPicture(it: Item, o: PictureOptions, original?: { widt
   try {
     return await createImageBitmap(probe, { resizeWidth: Math.max(1, Math.round(probe.width * s)), resizeHeight: Math.max(1, Math.round(probe.height * s)), resizeQuality: o.quality ?? 'medium' });
   } catch { return undefined; } finally { probe.close(); }
+}
+
+/** A picture to make: its longer side at most `long` (never made bigger), or exactly `width` × `height` (stretched to fit). */
+export type Shape = { long: number } | { width: number; height: number };
+
+/**
+ * The photo as several pictures, all made from ONE read of it (fetched with its longer side about `fetchSize`).
+ * Undefined when the browser can't open it. `made[i]` says picture i was made smaller on this computer (and isn't
+ * the fetched picture as it came). The caller closes each picture.
+ */
+export async function loadShapes(it: Item, fetchSize: number, shapes: Shape[], original?: { width?: number; height?: number }): Promise<{ bmps: ImageBitmap[]; made: boolean[] } | undefined> {
+  const { blob, full } = await blobOf(it, fetchSize);
+  if (!blob) return undefined;
+  let probe: ImageBitmap;
+  try { probe = await createImageBitmap(blob); } catch { return undefined; }
+  if (full && original) { original.width = probe.width; original.height = probe.height; }
+  const bmps: ImageBitmap[] = [], made: boolean[] = [];
+  try {
+    for (const sh of shapes) {
+      let w: number, h: number;
+      if ('long' in sh) {
+        const s = Math.min(1, sh.long / Math.max(probe.width, probe.height));
+        w = Math.max(1, Math.round(probe.width * s)); h = Math.max(1, Math.round(probe.height * s));
+      } else { w = sh.width; h = sh.height; }
+      const same = w === probe.width && h === probe.height;
+      bmps.push(same ? await createImageBitmap(probe) : await createImageBitmap(probe, { resizeWidth: w, resizeHeight: h, resizeQuality: 'high' }));
+      made.push(!same && w * h < probe.width * probe.height);
+    }
+    return { bmps, made };
+  } catch { bmps.forEach((b) => b.close()); return undefined; } finally { probe.close(); }
 }

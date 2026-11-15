@@ -411,7 +411,7 @@ export default function App() {
           </main>
         </div>
       </div>
-      {viewer && <Viewer list={viewer.list} index={viewer.i} setIndex={(i) => setViewer({ ...viewer, i })} pathOf={fx.pathOf} onClose={() => setViewer(null)} />}
+      {viewer && <Viewer list={viewer.list} index={viewer.i} setIndex={(i) => setViewer({ ...viewer, i })} pathOf={fx.pathOf} onClose={() => setViewer(null)} exact={exactAll} similar={similar} />}
       {(selecting || undo) && (
         <div className="bottom">
           {undo && <UndoBar undo={undo} onUndo={runUndo} onClose={() => setUndo(null)} />}

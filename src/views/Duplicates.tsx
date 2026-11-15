@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { exactDuplicates, fmtDuration, fmtSize, hasCameraData, lesserCopy, pickKeeper, pickSame, worseReason, type Item } from '../lib/model';
 import { coloursDiffer, lookAlikes } from '../pictures/compare';
 import type { Similar } from '../pictures/groups';
-import { comparable, comparePictures, needsLook, retryFailed, stopComparing, usePictures } from '../pictures/store';
+import { comparable, needsLook, retryFailed, sharpKind, usePictures } from '../pictures/store';
+import { sharpestOf } from '../read/plan';
+import { comparePictures } from '../read/reader';
+import { ReadProgress } from './ReadProgress';
 import { Preview } from './Grid';
 import { whatsAppVideoCopies } from '../lib/videos';
 import { forgetKept, isKept, keepTogether, useKept } from '../pictures/kept';
@@ -36,16 +39,9 @@ function ComparePanel({ all, readOnly, similar }: { all: Item[]; readOnly: boole
   if (!st.loaded) return <div className="panel"><span className="muted">Opening the picture comparison…</span></div>;
   return (
     <div className="panel">
-      {r.running ? (
+      {r.running ? <ReadProgress run={r} more="The sets below update every half minute." /> : (
         <>
-          <div className="stats"><div><b>{r.done.toLocaleString()}</b><span>of {r.total.toLocaleString()} photos compared</span></div></div>
-          <div className="progress"><i style={{ width: `${r.total ? (100 * r.done) / r.total : 0}%` }} /></div>
-          <div className="muted">Looking at “{r.current ?? '…'}”. The sets below update every half minute. You can keep using the app meanwhile.</div>
-          <div className="row"><button className="btn" onClick={stopComparing}>Pause</button></div>
-        </>
-      ) : (
-        <>
-          {left > 0 && <p className="muted">To find copies that aren't identical files, the app compares the pictures themselves, with an AI picture model from Google (MediaPipe). It looks at a small copy of each photo once, on this computer: no photo is sent anywhere. What it learns is kept in this browser and in your backup.</p>}
+          {left > 0 && <p className="muted">To find copies that aren't identical files, the app compares the pictures themselves, with an AI picture model from Google (MediaPipe). It looks at a small copy of each photo once, on this computer: no photo is sent anywhere. What it learns is kept in this browser and in your backup. Each photo is read only once: the same look also sorts it for Clean up (its AI, about 370 MB, is downloaded the first time).</p>}
           <div className="row">
             {left > 0 && <button className="btn primary" disabled={readOnly && !all.some((x) => x.gp)} onClick={() => comparePictures(all)}>{left < photos.length ? `Compare ${left.toLocaleString()} new photos` : `Compare ${left.toLocaleString()} photos`}</button>}
             {left > 0 && <span className="muted">You can pause and carry on later.</span>}
@@ -55,7 +51,7 @@ function ComparePanel({ all, readOnly, similar }: { all: Item[]; readOnly: boole
           {readOnly && left > 0 && !all.some((x) => x.gp) && <p className="muted">Open your photos first (Choose photos) so the app can read them.</p>}
         </>
       )}
-      {r.error && <p className="notice">{r.error}</p>}
+      {r.error && !r.running && <p className="notice">{r.error}</p>}
     </div>
   );
 }
@@ -130,13 +126,15 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
     const next = !isOut(x);
     setChanged((m) => new Map(m).set(x.id, next));
   };
+  // The sharpest of a set, comparing only photos whose small picture was made the same way.
+  const sharpest = (g: Item[]) => g[sharpestOf(g.map((x) => rec(x)?.sh ?? 0), g.map((x) => sharpKind(x, rec(x))))];
   const keepSharpest = (g: Item[]) => {
-    const best = g.reduce((a, b) => ((rec(b)?.sh ?? 0) > (rec(a)?.sh ?? 0) ? b : a));
+    const best = sharpest(g);
     setChanged((m) => { const n = new Map(m); g.forEach((x) => n.set(x.id, x !== best)); return n; });
   };
 
   // The copy the app suggests keeping in each set (look-alikes: the sharpest).
-  const keeperShown = (g: Item[]) => (tab === 'alike' ? g.reduce((a, b) => ((rec(b)?.sh ?? 0) > (rec(a)?.sh ?? 0) ? b : a)) : keeperOf(g));
+  const keeperShown = (g: Item[]) => (tab === 'alike' ? sharpest(g) : keeperOf(g));
   // A page of up to 60 sets. Every button acts on the sets of this page only. Sets moved to the trash or kept leave
   // the page; once the page is empty, the next 60 load. "Next page" leaves this page's sets for later.
   const PAGE = 60;
@@ -179,7 +177,7 @@ export function Duplicates({ items, all, similar, pathOf, onTrash, onOpen, readO
         ) : (
           <>
             <p className="muted">Photos taken close together (within a day) that look very alike: bursts, retakes, a cropped copy. They are <b>different photos</b>, so nothing is marked: open them, pick the ones to remove, or use “Keep only the sharpest”. Move the slider to the left to find more sets that are less alike, or to the right for only very close ones.</p>
-            <p className="muted" style={{ margin: 0 }}>{similar.withClip ? `${similar.withClip.toLocaleString()} of ${similar.compared.toLocaleString()} photos are compared with the stronger CLIP AI (from Clean up); the rest with the basic one.` : 'Photos are compared with the basic AI. Photos you sort in Clean up are compared with its stronger CLIP AI.'}</p>
+            <p className="muted" style={{ margin: 0 }}>{similar.withClip ? `${similar.withClip.toLocaleString()} of ${similar.compared.toLocaleString()} photos are compared with the stronger AI from Clean up; the rest with the basic one.` : 'Photos are compared with the basic AI. Photos you sort in Clean up are compared with its stronger AI.'}</p>
             <label className="row slider">How alike: <input type="range" min={80} max={98} step={1} value={alike} onChange={(e) => { const v = Number(e.target.value); setAlike(v); try { localStorage.setItem('po.alike', String(v)); } catch { /* only a convenience */ } }} /> <b>{alike}%</b></label>
           </>
         )}

@@ -1,17 +1,15 @@
-// "Clean up": looks at each photo once with the CLIP AI and keeps its fingerprint (512 numbers) in this browser and in
-// the backup. From the fingerprints, every photo is put in a group (Documents, Screenshots, People, Food…), and your
+// "Clean up": keeps each photo's SigLIP 2 AI fingerprint (768 numbers) in this browser and in the backup. The photos
+// are looked at by the one read in read/reader.ts. From the fingerprints, every photo is put in a group (Documents, Screenshots, People, Food…), and your
 // fixes teach it. Everything runs on this computer: no photo is sent anywhere. Nothing here deletes anything.
 import { useEffect, useState } from 'react';
 import { openDB, type IDBPDatabase } from 'idb';
-import { NEEDS_SIGN_IN } from '../drive/api';
-import { NO_HELPER, NOT_SIGNED_IN, RELOAD } from '../gphotos/bridge';
 import type { Item } from '../lib/model';
-import { loadPicture } from '../lib/picture';
-import { hasFile } from '../local/fs';
+import { idleRun, type ReadRun } from '../read/run';
 import { quantize } from '../pictures/compare';
 import { viaWhatsApp, whatsAppName } from '../lib/model';
 import { ready as facesReady } from '../faces/people';
-import { CLIP_DIM, CLIP_DTYPE, CLIP_MODEL, FP_VERSION, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, promptList, PROMPTS_VERSION, unitOf, type Bank, type Examples, type Placed } from './groups';
+import { AI_DIM, AI_DTYPE, AI_MODEL, AI_REVISION, FP_VERSION, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, OLD_AI_MODEL, promptList, PROMPTS_VERSION, scoreAll, unitOf, type Bank, type Examples, type Placed } from './groups';
+import { keepSigns, makeTagBank, tagAll, TAGS_VERSION, tagSentences, type TagBank } from './tags';
 
 /**
  * What the app keeps about one photo. `x` = the picture couldn't be read; `b` = which backup file holds it; `v` = which
@@ -37,6 +35,8 @@ export interface SortState {
   checks: Map<string, Check>;
   /** Photo → group, from the last scoring. */
   placed: Map<string, Placed>;
+  /** Photo → what else is in it (see sort/tags.ts: one bit per tag), from the last scoring. */
+  tags: Map<string, number>;
   /** How many fixes the last scoring learned from. */
   learnedFrom: number;
   /**
@@ -45,16 +45,19 @@ export interface SortState {
    */
   learned: Map<string, string>;
   scoring: boolean;
-  run: { running: boolean; done: number; total: number; step?: 'model' | 'sorting'; model?: { loaded: number; total: number }; current?: string; error?: string; startedAt?: number };
+  /** The read in progress (the same one Duplicates shows). */
+  run: ReadRun;
   v: number;
 }
-const state: SortState = { loaded: false, recs: new Map(), fixes: new Map(), checks: new Map(), placed: new Map(), learnedFrom: 0, learned: new Map(), scoring: false, run: { running: false, done: 0, total: 0 }, v: 0 };
+const state: SortState = { loaded: false, recs: new Map(), fixes: new Map(), checks: new Map(), placed: new Map(), tags: new Map(), learnedFrom: 0, learned: new Map(), scoring: false, run: idleRun(), v: 0 };
 const listeners = new Set<() => void>();
 let version = 0;
 const notify = () => { state.v = ++version; listeners.forEach((f) => f()); };
 /** Counters the backup watches: fingerprints made, and fixes or checks. */
 export const sortChanges = { n: 0, edits: 0 };
 export function subscribeSort(f: () => void): () => void { listeners.add(f); return () => { listeners.delete(f); }; }
+/** The reader shows its progress here. */
+export function showSortRun(run: ReadRun) { state.run = run; notify(); }
 
 let loading: Promise<void> | null = null;
 async function load() {
@@ -82,12 +85,12 @@ async function load() {
 async function changedAi(d: IDBPDatabase) {
   state.checks.clear();
   await d.put('kv', [], 'checks');
-  await d.delete('kv', `bank:${CLIP_MODEL}:${PROMPTS_VERSION}`);
   await d.put('kv', FP_VERSION, 'fp');
   sortChanges.edits++;
   try {
+    for (const key of await d.getAllKeys('kv')) if (typeof key === 'string' && key.startsWith('bank:')) await d.delete('kv', key);
     const c = await caches.open('transformers-cache');
-    for (const req of await c.keys()) if (req.url.includes(CLIP_MODEL) && /_quantized\.onnx/.test(req.url)) await c.delete(req);
+    for (const req of await c.keys()) if (req.url.includes(OLD_AI_MODEL)) await c.delete(req);
   } catch { /* no cache here: nothing to free */ }
 }
 
@@ -136,7 +139,7 @@ function call<T>(cw: ClipWorker, msg: Record<string, unknown>, transfer: Transfe
 }
 
 function startOne(onProgress?: (file: string, loaded: number, total: number) => void): Promise<ClipWorker> {
-  const w = new Worker(new URL('./clip.worker.ts', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./ai.worker.ts', import.meta.url), { type: 'module' });
   return new Promise((resolve, reject) => {
     const on = (e: MessageEvent) => {
       const m = e.data;
@@ -146,12 +149,12 @@ function startOne(onProgress?: (file: string, loaded: number, total: number) => 
     };
     w.addEventListener('message', on);
     w.addEventListener('error', (e) => { w.terminate(); reject(new Error(e.message || 'The AI couldn’t start in this browser.')); });
-    w.postMessage({ op: 'init', base: base(), model: CLIP_MODEL, dtype: CLIP_DTYPE });
+    w.postMessage({ op: 'init', base: base(), model: AI_MODEL, revision: AI_REVISION, dtype: AI_DTYPE });
   });
 }
 
 /** Starts the AI: one worker first (it downloads the model once), then more from the browser's copy. */
-function startWorkers(): Promise<ClipWorker[]> {
+function startWorkers(onModel?: (loaded: number, total: number) => void): Promise<ClipWorker[]> {
   if (workers.length) return Promise.resolve(workers);
   starting ??= (async () => {
     const files = new Map<string, [number, number]>();
@@ -159,10 +162,9 @@ function startWorkers(): Promise<ClipWorker[]> {
       files.set(file, [loaded, total]);
       let l = 0, t = 0;
       for (const [a, b] of files.values()) { l += a; t += b; }
-      state.run.model = { loaded: l, total: t };
-      notify();
+      onModel?.(l, t);
     });
-    // Each extra worker holds its own copy of the AI (about 350 MB of memory), so only on computers that have room.
+    // Each extra worker holds its own copy of the AI (about 400 MB of memory), so only on computers that have room.
     const nav = typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }) : undefined;
     const cores = nav?.hardwareConcurrency || 2, mem = nav?.deviceMemory ?? 8;
     const extra = Math.min(cores >= 6 ? 2 : cores >= 4 ? 1 : 0, mem >= 8 ? 2 : mem >= 4 ? 1 : 0);
@@ -174,27 +176,30 @@ function startWorkers(): Promise<ClipWorker[]> {
 }
 
 let bank: Bank | null = null;
-/** The sentence fingerprints, made once and kept. */
+/** The sentence fingerprints. They come with the app, made ahead with the full-size AI (see scripts/sentences.mjs). */
 async function getBank(): Promise<Bank> {
   if (bank) return bank;
-  const d = await db();
-  const key = `bank:${CLIP_MODEL}:${CLIP_DTYPE}:${PROMPTS_VERSION}`;
-  const saved: Float32Array | undefined = await d.get('kv', key);
-  const prompts = promptList();
-  if (saved && saved.length === prompts.length * CLIP_DIM) return (bank = makeBank(saved));
-  const [first] = await startWorkers();
-  const { emb } = await call<{ emb: Float32Array }>(first, { op: 'text', prompts: prompts.map((p) => p.text) });
-  await d.put('kv', emb, key);
+  const res = await fetch(`${base()}ai/sentences-${PROMPTS_VERSION}.bin`);
+  if (!res.ok) throw new Error('The app couldn’t load its group sentences. Reload the page.');
+  const emb = new Float32Array(await res.arrayBuffer());
+  if (emb.length !== promptList().length * AI_DIM) throw new Error('The app’s group sentences don’t match this version. Reload the page.');
   return (bank = makeBank(emb));
 }
 
+let tagBank: TagBank | null = null;
+/** The tag sentence fingerprints, which come with the app the same way. */
+async function getTagBank(): Promise<TagBank> {
+  if (tagBank) return tagBank;
+  const res = await fetch(`${base()}ai/tags-${TAGS_VERSION}.bin`);
+  if (!res.ok) throw new Error('The app couldn’t load its tag sentences. Reload the page.');
+  const emb = new Float32Array(await res.arrayBuffer());
+  if (emb.length !== tagSentences().length * AI_DIM) throw new Error('The app’s tag sentences don’t match this version. Reload the page.');
+  return (tagBank = makeTagBank(emb));
+}
+
 // ---------- sorting ----------
-let stopFlag = false;
-export function stopSorting() { stopFlag = true; }
-const FATAL = [NO_HELPER, NOT_SIGNED_IN, RELOAD];
 /** A photo kept in Google Drive (it needs the Google sign-in, which runs out after about an hour). */
 export const inDrive = (it: Item) => !it.local && !it.gp;
-const SIZE = 336; // the AI looks at 224 × 224, after the shorter side is made 224
 
 /** A number from a photo's id, the same every time: sorting in this order mixes all years and places. */
 function mix(id: string): number {
@@ -202,20 +207,31 @@ function mix(id: string): number {
   for (let i = 0; i < id.length; i++) { h ^= id.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
-
 /**
- * Looks at every photo not looked at yet. Safe to stop and start again. The photos go in a mixed order (not newest
- * first), so after a few minutes the groups already hold a fair sample of all your photos and can be checked.
+ * The order photos are sorted in: mixed (not newest first), so after a few minutes the groups already hold a fair
+ * sample of all your photos and can be checked. WhatsApp photos go last: their group comes from the name, so your
+ * camera photos are worth sorting first.
  */
-export async function sortPhotos(items: Item[]) {
-  if (state.run.running) return;
+export const sortOrder = (it: Item) => (whatsAppName(it.name) ? 2 ** 32 : 0) + mix(it.id);
+
+/** What the reader uses to keep the AI fingerprint of each picture it fetched. */
+export interface SortSession {
+  /** The AI's workers: each looks at one picture at a time. */
+  workers: readonly unknown[];
+  /**
+   * One worker looks at one photo and its fingerprint is kept; without a picture the photo is marked as unreadable.
+   * Throws only when the AI itself stopped. The picture is handed over (no need to close it).
+   */
+  take(worker: unknown, it: Item, bmp: ImageBitmap | undefined): Promise<void>;
+  /** Saves what is not saved yet. */
+  flush(): Promise<void>;
+}
+
+/** Starts the AI (the first time it is downloaded; `onModel` gets the progress in bytes) and returns the way to add photos. */
+export async function sortSession(onModel?: (loaded: number, total: number) => void): Promise<SortSession> {
   await load();
-  // WhatsApp photos go last: their group comes from the name, so your camera photos are worth sorting first.
-  const order = (it: Item) => (whatsAppName(it.name) ? 2 ** 32 : 0) + mix(it.id);
-  const todo = items.filter((it) => needsSort(it, state.recs.get(it.id)) && (!it.local || hasFile(it.id))).map((it) => [order(it), it] as const).sort((a, b) => a[0] - b[0]).map(([, it]) => it);
-  stopFlag = false;
-  state.run = { running: true, done: 0, total: todo.length, step: 'model' };
-  notify();
+  const ws = await startWorkers(onModel);
+  await getBank();
   const d = await db();
   let pending: SortRec[] = [];
   const flush = async () => {
@@ -226,66 +242,22 @@ export async function sortPhotos(items: Item[]) {
     await tx.done;
     sortChanges.n++;
   };
-  try {
-    const ws = await startWorkers();
-    await getBank();
-    state.run.step = 'sorting'; state.run.startedAt = Date.now();
-    notify();
-    // Pictures are fetched up to 6 at once; each AI worker looks at one at a time.
-    type Got = { it: Item; bmp?: ImageBitmap; err?: unknown };
-    const queue: Promise<Got>[] = [];
-    let next = 0, last = Date.now(), signInLost = false;
-    const fill = () => {
-      while (queue.length < 6 && next < todo.length && !stopFlag) {
-        const it = todo[next++];
-        if (signInLost && inDrive(it)) continue; // left for after you sign in again
-        queue.push(loadPicture(it, { size: SIZE, fit: 'long', quality: 'high' }).then((bmp) => ({ it, bmp }), (err) => ({ it, err })));
-      }
-    };
-    const one = async (cw: ClipWorker, it: Item, bmp?: ImageBitmap) => {
+  return {
+    workers: ws,
+    async take(worker, it, bmp) {
       let rec: SortRec = { id: it.id, x: 1 };
       if (bmp) {
-        try { const { emb } = await call<{ emb: Float32Array }>(cw, { op: 'image', bmp }, [bmp]); rec = { id: it.id, k: quantize(emb), v: FP_VERSION }; } catch (e) {
+        try { const { emb } = await call<{ emb: Float32Array }>(worker as ClipWorker, { op: 'image', bmp }, [bmp]); rec = { id: it.id, k: quantize(emb), v: FP_VERSION }; } catch (e) {
           if (!workers.length) throw e; // the AI itself stopped, not just this picture
         }
       }
       if (it.local) rec.m = it.mtime;
       state.recs.set(it.id, rec);
       pending.push(rec);
-      state.run.done++;
-      state.run.current = it.name;
       if (pending.length >= 50) await flush();
-      if (Date.now() - last > 700) { last = Date.now(); notify(); }
-    };
-    fill();
-    const running = new Set<Promise<void>>();
-    const idle = [...ws];
-    let wake: (() => void) | null = null;
-    let failed: unknown;
-    // When the Google sign-in runs out, the Drive photos wait and the others carry on.
-    while (queue.length) {
-      const { it, bmp, err } = await queue.shift()!;
-      if (stopFlag || failed) { bmp?.close(); continue; }
-      fill();
-      if (err && (err as Error).message === NEEDS_SIGN_IN) { signInLost = true; continue; }
-      if (err && FATAL.includes((err as Error).message)) throw err; // nothing can be read: stop
-      while (!idle.length) await new Promise<void>((r) => { wake = r; });
-      const cw = idle.shift()!;
-      const p: Promise<void> = one(cw, it, bmp)
-        .catch((e) => { failed ??= e; })
-        .finally(() => { idle.push(cw); running.delete(p); const w = wake; wake = null; w?.(); });
-      running.add(p);
-    }
-    await Promise.all(running);
-    if (failed) throw failed;
-    if (signInLost) state.run.error = NEEDS_SIGN_IN;
-  } catch (e) {
-    state.run.error = (e as Error).message || String(e);
-  } finally {
-    await flush().catch(() => {});
-    state.run.running = false; state.run.current = undefined; state.run.step = undefined;
-    notify();
-  }
+    },
+    flush,
+  };
 }
 
 /** Lets the photos that couldn't be read be tried again. */
@@ -298,6 +270,14 @@ export async function retryUnreadable() {
 }
 
 // ---------- groups ----------
+/** Your newest fixes that it was asked to learn from, as examples. */
+function learnedExamples(): Examples {
+  const fixes = [...state.fixes].filter(([id, g]) => state.learned.get(id) === g && fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
+  const ex: Examples = { emb: new Float32Array(fixes.length * AI_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
+  fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * AI_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
+  return ex;
+}
+
 let scorer: Worker | null = null;
 let scoreSeq = 0;
 /** Puts every photo in a group: the AI's scores (with your fixes as examples), then the sure signals. */
@@ -312,13 +292,11 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
   state.scoring = true; notify();
   try {
     const b = withK.length ? await getBank() : null;
-    const k = new Int8Array(withK.length * CLIP_DIM);
-    withK.forEach((it, i) => k.set(state.recs.get(it.id)!.k!, i * CLIP_DIM));
-    // your newest fixes that it was asked to learn from, as examples
-    const fixes = [...state.fixes].filter(([id, g]) => state.learned.get(id) === g && fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
-    const ex: Examples = { emb: new Float32Array(fixes.length * CLIP_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
-    fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * CLIP_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
-    let ai: { g: Uint8Array; p: Float32Array; probs: Float32Array } = { g: new Uint8Array(0), p: new Float32Array(0), probs: new Float32Array(0) };
+    const k = new Int8Array(withK.length * AI_DIM);
+    withK.forEach((it, i) => k.set(state.recs.get(it.id)!.k!, i * AI_DIM));
+    const tb = withK.length ? await getTagBank() : null;
+    const ex = learnedExamples();
+    let ai: { g: Uint8Array; p: Float32Array; probs: Float32Array; tags: Uint32Array } = { g: new Uint8Array(0), p: new Float32Array(0), probs: new Float32Array(0), tags: new Uint32Array(0) };
     if (b && withK.length) {
       scorer ??= new Worker(new URL('./score.worker.ts', import.meta.url), { type: 'module' });
       const id = ++scoreSeq;
@@ -328,29 +306,55 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
         const bad = (e: ErrorEvent) => { w.removeEventListener('message', on); w.removeEventListener('error', bad); scorer?.terminate(); scorer = null; reject(new Error(e.message || 'Sorting stopped')); };
         w.addEventListener('message', on);
         w.addEventListener('error', bad);
-        w.postMessage({ id, k, n: withK.length, bank: b, ex: ex.n ? ex : undefined }, [k.buffer]);
+        w.postMessage({ id, k, n: withK.length, bank: b, ex: ex.n ? ex : undefined, tagBank: tb ?? undefined }, [k.buffer]);
       });
     }
     const faces = new Set([...(await facesReady()).faces.values()].map((f) => f.itemId));
     const at = new Map(withK.map((it, i) => [it.id, i]));
     const placed = new Map<string, Placed>();
+    const tags = new Map<string, number>();
+    withK.forEach((it, i) => tags.set(it.id, ai.tags[i] ?? 0));
     for (const it of items) {
       if (!sortable(it) && !(it.kind === 'video' && viaWhatsApp(it, pathOf))) continue; // WhatsApp videos join the WhatsApp group
       const i = at.get(it.id);
       const fix = state.fixes.get(it.id);
       const G = GROUPS.length;
       const r = place(i != null ? { g: ai.g[i], p: ai.p[i], probs: ai.probs.subarray(i * G, (i + 1) * G) } : undefined,
-        { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face: faces.has(it.id), camera: !!it.camera || it.lat != null });
+        { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face: faces.has(it.id), camera: !!it.camera || it.lat != null, keepSign: i != null && keepSigns(ai.tags[i]).length > 0 });
       if (r) placed.set(it.id, r);
     }
     state.placed = placed;
-    state.learnedFrom = fixes.length;
+    state.tags = tags;
+    state.learnedFrom = ex.n;
   } catch (e) {
     state.run.error = (e as Error).message || String(e);
   } finally {
     state.scoring = false;
     notify();
   }
+}
+
+/**
+ * The group and the tags of one photo, for its info card: from the last scoring when there is one, else worked out
+ * now for this photo alone (the same way, so both always agree).
+ */
+export async function knownAbout(it: Item, pathOf: (folderId?: string) => string = () => ''): Promise<{ placed?: Placed; tags: number }> {
+  await load();
+  const rec = state.recs.get(it.id);
+  const k = fresh(rec) ? rec.k : undefined;
+  let placed = state.placed.get(it.id), tags = state.tags.get(it.id);
+  if (tags == null) tags = k ? tagAll(k, 1, await getTagBank())[0] : 0;
+  if (!placed && (sortable(it) || (it.kind === 'video' && viaWhatsApp(it, pathOf)))) {
+    const fix = state.fixes.get(it.id);
+    const ex = k ? learnedExamples() : undefined;
+    const ai = k ? scoreAll(k, 1, await getBank(), ex?.n ? ex : undefined) : undefined;
+    const faces = (await facesReady()).faces;
+    let face = false;
+    for (const f of faces.values()) if (f.itemId === it.id) { face = true; break; }
+    placed = place(ai ? { g: ai.g[0], p: ai.p[0], probs: ai.probs } : undefined,
+      { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face, camera: !!it.camera || it.lat != null, keepSign: keepSigns(tags).length > 0 });
+  }
+  return { placed, tags };
 }
 
 /** Fixes made (or changed) since you last pressed "Learn from my fixes". */
