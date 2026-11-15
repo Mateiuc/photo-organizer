@@ -5,12 +5,13 @@ import { setTicked, startSelecting, stopSelecting, useShownList, useTickedOf } f
 import type { Item } from '../lib/model';
 import { GROUP_BY_ID, GROUPS, SIDES, type Side, type Why } from '../sort/groups';
 import { NEEDS_SIGN_IN, signIn } from '../drive/api';
-import { checkPhoto, clearChecks, fixGroup, fixGroups, fresh, inDrive, needsSort, newFixCount, placeAll, retryUnreadable, sortable, sortPhotos, stopSorting, useSort } from '../sort/store';
+import { checkPhoto, clearChecks, fixGroup, fixGroups, fresh, inDrive, needsSort, newFixCount, placeAll, retryUnreadable, sortable, useSort } from '../sort/store';
+import { sortPhotos } from '../read/reader';
+import { ReadProgress } from './ReadProgress';
 import { Thumb } from './Grid';
 
 const sideOf = (g: number) => GROUPS[g].side;
 const pct = (a: number, b: number) => (b ? Math.round((100 * a) / b) : 0);
-const mins = (s: number) => (s < 90 ? 'about a minute' : s < 3600 ? `about ${Math.round(s / 60)} minutes` : `about ${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`);
 
 function GroupSelect({ it, value, onPick }: { it: Item; value: number; onPick: (g: string) => void }) {
   return (
@@ -164,28 +165,15 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
   };
   const junkScore = score('junk'), restScore = score('rest');
   const newFixes = newFixCount(st);
-  const rate = r.running && r.step === 'sorting' && r.startedAt && r.done > 5 ? r.done / ((Date.now() - r.startedAt) / 1000) : 0;
 
   return (
     <div className="stack" style={{ maxWidth: 'none' }}>
       <div className="panel">
         <p className="muted" style={{ margin: 0 }}>
           The app sorts your photos into groups with an AI that understands pictures and words together (SigLIP 2, from Google). It runs on this computer: no photo is sent anywhere.
-          The AI is downloaded once (about 370 MB) and the browser keeps it. Sorting deletes nothing. To clean up, open a group, tick its photos and use the bar at the bottom: <b>Move to trash</b> asks you first and can be undone, <b>Move to group</b> puts them in another group.
+          The AI is downloaded once (about 370 MB) and the browser keeps it. Each photo is read only once: the same look also compares it for Duplicates. Sorting deletes nothing. To clean up, open a group, tick its photos and use the bar at the bottom: <b>Move to trash</b> asks you first and can be undone, <b>Move to group</b> puts them in another group.
         </p>
-        {r.running ? (
-          <>
-            {r.step === 'model' && <div className="muted">{r.model?.total ? `Downloading the AI (only the first time): ${Math.round(r.model.loaded / 1e6)} of ${Math.round(r.model.total / 1e6)} MB` : 'Starting the AI…'}</div>}
-            {r.step === 'sorting' && (
-              <>
-                <div className="stats"><div><b>{r.done.toLocaleString()}</b><span>of {r.total.toLocaleString()} photos sorted</span></div></div>
-                <div className="progress"><i style={{ width: `${r.total ? (100 * r.done) / r.total : 0}%` }} /></div>
-                <div className="muted">Looking at “{r.current ?? '…'}”{rate ? ` · ${mins((r.total - r.done) / rate)} left` : ''}. You can keep using the app, or pause and carry on later.</div>
-              </>
-            )}
-            <div className="row"><button className="btn" onClick={stopSorting}>Pause</button></div>
-          </>
-        ) : (
+        {r.running ? <ReadProgress run={r} /> : (
           <div className="row">
             {left > 0 && <button className="btn primary" onClick={() => sort(false)}>{sortedN ? `Sort ${left.toLocaleString()} more photos` : `Sort ${left.toLocaleString()} photos`}</button>}
             {left > 0 && <span className="muted">{sortedN ? `${sortedN.toLocaleString()} sorted so far.` : 'The photos go in a mixed order, so after a few minutes you can already check the groups. You can pause and carry on later.'}</span>}

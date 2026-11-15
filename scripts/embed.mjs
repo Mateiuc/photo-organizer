@@ -26,7 +26,7 @@ const old = process.env.REUSE && fs.existsSync(out) ? JSON.parse(fs.readFileSync
 const image = old ? old.image : []; let ms = old ? old.msPerImage * files.length : 0;
 for (const f of old ? [] : files) {
   let img = await RawImage.read(f);
-  const k = 336 / Math.max(img.width, img.height);
+  const k = Number(process.env.SIZE || 336) / Math.max(img.width, img.height);
   if (k < 1) img = await img.resize(Math.round(img.width * k), Math.round(img.height * k));
   const t = performance.now();
   const o = await vis(await proc(img));

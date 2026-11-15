@@ -116,10 +116,10 @@ const unf32 = (s: string) => Array.from(new Float32Array(Uint8Array.from(atob(s)
 const b64 = (a: ArrayBufferView) => { const b = new Uint8Array(a.buffer, a.byteOffset, a.byteLength); let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s); };
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-interface PicRow { i: string; h?: string; g?: string; e?: string; s?: number; f?: number; a?: number; c?: number[]; m?: number; x?: 1; W?: number; H?: number }
-const picRow = (r: PicRec): PicRow => (r.x ? { i: r.id, x: 1, m: r.m } : { i: r.id, h: b64(r.h!), g: b64(r.g!), e: b64(r.e!), s: r.sh, f: r.fl, a: r.ar, c: r.c, m: r.m, W: r.pw, H: r.ph });
+interface PicRow { i: string; h?: string; g?: string; e?: string; s?: number; f?: number; a?: number; c?: number[]; m?: number; x?: 1; W?: number; H?: number; d?: 1 }
+const picRow = (r: PicRec): PicRow => (r.x ? { i: r.id, x: 1, m: r.m } : { i: r.id, h: b64(r.h!), g: b64(r.g!), e: b64(r.e!), s: r.sh, f: r.fl, a: r.ar, c: r.c, m: r.m, W: r.pw, H: r.ph, d: r.d });
 const fromPicRow = (w: PicRow, b: number): PicRec => (w.x ? { id: w.i, x: 1, m: w.m, b } : {
-  id: w.i, h: new Uint32Array(unb64(w.h!).buffer), g: unb64(w.g!), e: new Int8Array(unb64(w.e!).buffer), sh: w.s, fl: w.f, ar: w.a, c: w.c, m: w.m, pw: w.W, ph: w.H, b,
+  id: w.i, h: new Uint32Array(unb64(w.h!).buffer), g: unb64(w.g!), e: new Int8Array(unb64(w.e!).buffer), sh: w.s, fl: w.f, ar: w.a, c: w.c, m: w.m, pw: w.W, ph: w.H, d: w.d, b,
 });
 
 // v = which AI made the fingerprint (none = the first, compressed one; those are made again).

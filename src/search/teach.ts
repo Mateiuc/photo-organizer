@@ -2,7 +2,8 @@
 // then learns from the marks in a worker and keeps the matches with the topic.
 import type { Item } from '../lib/model';
 import { DIM } from '../pictures/compare';
-import { comparable, comparePictures, needsLook, picturesReady } from '../pictures/store';
+import { comparable, needsLook, picturesReady } from '../pictures/store';
+import { comparePictures } from '../read/reader';
 import { hasFile } from '../local/fs';
 import { LEARN, type LearnInput } from './learn';
 import { marksSig, saveLearned, setLearnState, topicsReady } from './topics';
@@ -44,10 +45,10 @@ export async function learnTopic(id: string, all: Item[]) {
     const need = wanted.map((x) => byId.get(x)).filter((it): it is Item => !!it && needsLook(it, pics.recs.get(it.id)) && (!it.local || hasFile(it.id)));
     let note: string | undefined;
     if (need.length) {
-      if (pics.run.running) note = 'Compare pictures is running, so some marked photos may not have been looked at yet. Search again when it finishes.';
+      if (pics.run.running) note = 'The app is reading your photos right now, so some marked photos may not have been looked at yet. Search again when it finishes.';
       else {
         setLearnState({ id, step: 'looking' });
-        await comparePictures(need);
+        await comparePictures(need, { alone: true }); // only these few, right now: no waiting for the Clean-up AI
         if (pics.run.error) throw new Error(pics.run.error);
       }
     }
