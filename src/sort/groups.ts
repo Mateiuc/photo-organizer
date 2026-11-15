@@ -25,7 +25,7 @@ export const FP_VERSION = 3;
  * Change when the sentences change, then run `npm run sentences`: the sentence fingerprints come with the app
  * (public/ai/sentences-N.bin, made with the full-size words part of the AI), so the browser never downloads that part.
  */
-export const PROMPTS_VERSION = 3;
+export const PROMPTS_VERSION = 4;
 
 export type Side = 'junk' | 'call' | 'keep' | 'other' | 'whatsapp';
 export interface Group { id: string; name: string; side: Side; prompts: string[] }
@@ -77,6 +77,8 @@ export const GROUPS: Group[] = [
     'a photo of the sea', 'a photo of mountains', 'a photo of a city', 'a photo of a garden', 'a photo of a room', 'a photo of a tool', 'a photo of a sunset',
     'a photo taken from an airplane window', 'an aerial view of city lights at night from a plane', 'a view of clouds and sky from a plane',
     'a night photo of a city', 'a dark photo taken at night', 'a photo of the sky', 'a photo taken through a window',
+    'a photo of a living room with a television', 'a photo of an office with desks and computers', 'a photo of a room with a tv on the wall',
+    'a photo of a street sign', 'a photo of a sign on a building', 'a photo of a shop front with a sign',
   ] },
   // Known from the file name or folder, not from the AI (so no sentences). Last, so the others keep their numbers.
   { id: 'whatsapp', name: 'WhatsApp', side: 'whatsapp', prompts: [] },
@@ -216,8 +218,8 @@ export function choose(probs: ArrayLike<number>, camera: boolean): { g: number; 
   return { g: Math.max(0, best), p: sum && best >= 0 ? probs[best] / sum : 0 };
 }
 
-export type Why = 'ai' | 'name' | 'face' | 'you' | 'unsure';
-/** `guess`: for 'unsure', the junk group the AI leaned to. */
+export type Why = 'ai' | 'name' | 'face' | 'you' | 'unsure' | 'mixed';
+/** `guess`: for 'unsure' and 'mixed', the junk group the AI leaned to. */
 export interface Placed { g: number; p: number; why: Why; guess?: number }
 
 /** A junk group only gets photos the AI is at least this sure about; less sure ones go to Everything else. */
@@ -230,8 +232,12 @@ export const FACE_JUNK_SURE = 0.8;
  * The final group of one photo: your fix first; then a WhatsApp photo or a screenshot, recognised from the file
  * itself; then a photo with a face goes to People, unless the AI is very sure it is a document, label, screen or
  * scan-tool screen (an ID card has a face too).
+ *
+ * `keepSign`: the photo's tags say something worth keeping is in it (people, a car, a room, food…, see keepSigns in
+ * tags.ts). Documents, Labels and Photos of screens don't get such a photo, however sure the AI is: it goes to
+ * Everything else, marked 'mixed'. Measured with scripts/junkcheck.ts, the numbers are in the pull request.
  */
-export function place(ai: { g: number; p: number; probs?: ArrayLike<number> } | undefined, o: { fix?: number; whatsapp?: boolean; screenshot?: boolean; face?: boolean; camera?: boolean }): Placed | undefined {
+export function place(ai: { g: number; p: number; probs?: ArrayLike<number> } | undefined, o: { fix?: number; whatsapp?: boolean; screenshot?: boolean; face?: boolean; camera?: boolean; keepSign?: boolean }): Placed | undefined {
   if (o.fix != null) return { g: o.fix, p: 1, why: 'you' };
   if (o.whatsapp) return { g: GROUP_BY_ID.get('whatsapp')!, p: 1, why: 'name' };
   if (o.screenshot) return { g: GROUP_BY_ID.get('shots')!, p: 1, why: 'name' };
@@ -241,5 +247,7 @@ export function place(ai: { g: number; p: number; probs?: ArrayLike<number> } | 
   const sureJunk = (side === 'junk' || side === 'call') && c.p >= FACE_JUNK_SURE;
   if (o.face && !sureJunk && GROUPS[c.g].id !== 'people') return { g: GROUP_BY_ID.get('people')!, p: Math.max(side === 'keep' || side === 'other' ? c.p : 0, 0.9), why: 'face' };
   if (side === 'junk' && c.p < JUNK_SURE) return { g: GROUP_BY_ID.get('other')!, p: c.p, why: 'unsure', guess: c.g };
+  // not for Screenshots: a screenshot of a photo of people is still a screenshot
+  if (side === 'junk' && o.keepSign && GROUPS[c.g].id !== 'shots') return { g: GROUP_BY_ID.get('other')!, p: c.p, why: 'mixed', guess: c.g };
   return { g: c.g, p: c.p, why: 'ai' };
 }

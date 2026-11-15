@@ -8,7 +8,8 @@ import { idleRun, type ReadRun } from '../read/run';
 import { quantize } from '../pictures/compare';
 import { viaWhatsApp, whatsAppName } from '../lib/model';
 import { ready as facesReady } from '../faces/people';
-import { AI_DIM, AI_DTYPE, AI_MODEL, AI_REVISION, FP_VERSION, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, OLD_AI_MODEL, promptList, PROMPTS_VERSION, unitOf, type Bank, type Examples, type Placed } from './groups';
+import { AI_DIM, AI_DTYPE, AI_MODEL, AI_REVISION, FP_VERSION, GROUP_BY_ID, GROUPS, LEARN, makeBank, place, OLD_AI_MODEL, promptList, PROMPTS_VERSION, scoreAll, unitOf, type Bank, type Examples, type Placed } from './groups';
+import { keepSigns, makeTagBank, tagAll, TAGS_VERSION, tagSentences, type TagBank } from './tags';
 
 /**
  * What the app keeps about one photo. `x` = the picture couldn't be read; `b` = which backup file holds it; `v` = which
@@ -34,6 +35,8 @@ export interface SortState {
   checks: Map<string, Check>;
   /** Photo → group, from the last scoring. */
   placed: Map<string, Placed>;
+  /** Photo → what else is in it (see sort/tags.ts: one bit per tag), from the last scoring. */
+  tags: Map<string, number>;
   /** How many fixes the last scoring learned from. */
   learnedFrom: number;
   /**
@@ -46,7 +49,7 @@ export interface SortState {
   run: ReadRun;
   v: number;
 }
-const state: SortState = { loaded: false, recs: new Map(), fixes: new Map(), checks: new Map(), placed: new Map(), learnedFrom: 0, learned: new Map(), scoring: false, run: idleRun(), v: 0 };
+const state: SortState = { loaded: false, recs: new Map(), fixes: new Map(), checks: new Map(), placed: new Map(), tags: new Map(), learnedFrom: 0, learned: new Map(), scoring: false, run: idleRun(), v: 0 };
 const listeners = new Set<() => void>();
 let version = 0;
 const notify = () => { state.v = ++version; listeners.forEach((f) => f()); };
@@ -183,6 +186,17 @@ async function getBank(): Promise<Bank> {
   return (bank = makeBank(emb));
 }
 
+let tagBank: TagBank | null = null;
+/** The tag sentence fingerprints, which come with the app the same way. */
+async function getTagBank(): Promise<TagBank> {
+  if (tagBank) return tagBank;
+  const res = await fetch(`${base()}ai/tags-${TAGS_VERSION}.bin`);
+  if (!res.ok) throw new Error('The app couldn’t load its tag sentences. Reload the page.');
+  const emb = new Float32Array(await res.arrayBuffer());
+  if (emb.length !== tagSentences().length * AI_DIM) throw new Error('The app’s tag sentences don’t match this version. Reload the page.');
+  return (tagBank = makeTagBank(emb));
+}
+
 // ---------- sorting ----------
 /** A photo kept in Google Drive (it needs the Google sign-in, which runs out after about an hour). */
 export const inDrive = (it: Item) => !it.local && !it.gp;
@@ -256,6 +270,14 @@ export async function retryUnreadable() {
 }
 
 // ---------- groups ----------
+/** Your newest fixes that it was asked to learn from, as examples. */
+function learnedExamples(): Examples {
+  const fixes = [...state.fixes].filter(([id, g]) => state.learned.get(id) === g && fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
+  const ex: Examples = { emb: new Float32Array(fixes.length * AI_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
+  fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * AI_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
+  return ex;
+}
+
 let scorer: Worker | null = null;
 let scoreSeq = 0;
 /** Puts every photo in a group: the AI's scores (with your fixes as examples), then the sure signals. */
@@ -272,11 +294,9 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
     const b = withK.length ? await getBank() : null;
     const k = new Int8Array(withK.length * AI_DIM);
     withK.forEach((it, i) => k.set(state.recs.get(it.id)!.k!, i * AI_DIM));
-    // your newest fixes that it was asked to learn from, as examples
-    const fixes = [...state.fixes].filter(([id, g]) => state.learned.get(id) === g && fresh(state.recs.get(id))).slice(-LEARN.maxExamples);
-    const ex: Examples = { emb: new Float32Array(fixes.length * AI_DIM), group: new Uint8Array(fixes.length), n: fixes.length };
-    fixes.forEach(([id, g], i) => { ex.emb.set(unitOf(state.recs.get(id)!.k!), i * AI_DIM); ex.group[i] = GROUP_BY_ID.get(g) ?? 0; });
-    let ai: { g: Uint8Array; p: Float32Array; probs: Float32Array } = { g: new Uint8Array(0), p: new Float32Array(0), probs: new Float32Array(0) };
+    const tb = withK.length ? await getTagBank() : null;
+    const ex = learnedExamples();
+    let ai: { g: Uint8Array; p: Float32Array; probs: Float32Array; tags: Uint32Array } = { g: new Uint8Array(0), p: new Float32Array(0), probs: new Float32Array(0), tags: new Uint32Array(0) };
     if (b && withK.length) {
       scorer ??= new Worker(new URL('./score.worker.ts', import.meta.url), { type: 'module' });
       const id = ++scoreSeq;
@@ -286,29 +306,55 @@ export async function placeAll(items: Item[], pathOf: (folderId?: string) => str
         const bad = (e: ErrorEvent) => { w.removeEventListener('message', on); w.removeEventListener('error', bad); scorer?.terminate(); scorer = null; reject(new Error(e.message || 'Sorting stopped')); };
         w.addEventListener('message', on);
         w.addEventListener('error', bad);
-        w.postMessage({ id, k, n: withK.length, bank: b, ex: ex.n ? ex : undefined }, [k.buffer]);
+        w.postMessage({ id, k, n: withK.length, bank: b, ex: ex.n ? ex : undefined, tagBank: tb ?? undefined }, [k.buffer]);
       });
     }
     const faces = new Set([...(await facesReady()).faces.values()].map((f) => f.itemId));
     const at = new Map(withK.map((it, i) => [it.id, i]));
     const placed = new Map<string, Placed>();
+    const tags = new Map<string, number>();
+    withK.forEach((it, i) => tags.set(it.id, ai.tags[i] ?? 0));
     for (const it of items) {
       if (!sortable(it) && !(it.kind === 'video' && viaWhatsApp(it, pathOf))) continue; // WhatsApp videos join the WhatsApp group
       const i = at.get(it.id);
       const fix = state.fixes.get(it.id);
       const G = GROUPS.length;
       const r = place(i != null ? { g: ai.g[i], p: ai.p[i], probs: ai.probs.subarray(i * G, (i + 1) * G) } : undefined,
-        { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face: faces.has(it.id), camera: !!it.camera || it.lat != null });
+        { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face: faces.has(it.id), camera: !!it.camera || it.lat != null, keepSign: i != null && keepSigns(ai.tags[i]).length > 0 });
       if (r) placed.set(it.id, r);
     }
     state.placed = placed;
-    state.learnedFrom = fixes.length;
+    state.tags = tags;
+    state.learnedFrom = ex.n;
   } catch (e) {
     state.run.error = (e as Error).message || String(e);
   } finally {
     state.scoring = false;
     notify();
   }
+}
+
+/**
+ * The group and the tags of one photo, for its info card: from the last scoring when there is one, else worked out
+ * now for this photo alone (the same way, so both always agree).
+ */
+export async function knownAbout(it: Item, pathOf: (folderId?: string) => string = () => ''): Promise<{ placed?: Placed; tags: number }> {
+  await load();
+  const rec = state.recs.get(it.id);
+  const k = fresh(rec) ? rec.k : undefined;
+  let placed = state.placed.get(it.id), tags = state.tags.get(it.id);
+  if (tags == null) tags = k ? tagAll(k, 1, await getTagBank())[0] : 0;
+  if (!placed && (sortable(it) || (it.kind === 'video' && viaWhatsApp(it, pathOf)))) {
+    const fix = state.fixes.get(it.id);
+    const ex = k ? learnedExamples() : undefined;
+    const ai = k ? scoreAll(k, 1, await getBank(), ex?.n ? ex : undefined) : undefined;
+    const faces = (await facesReady()).faces;
+    let face = false;
+    for (const f of faces.values()) if (f.itemId === it.id) { face = true; break; }
+    placed = place(ai ? { g: ai.g[0], p: ai.p[0], probs: ai.probs } : undefined,
+      { fix: fix != null ? GROUP_BY_ID.get(fix) : undefined, whatsapp: !!viaWhatsApp(it, pathOf), screenshot: it.kind === 'screenshot', face, camera: !!it.camera || it.lat != null, keepSign: keepSigns(tags).length > 0 });
+  }
+  return { placed, tags };
 }
 
 /** Fixes made (or changed) since you last pressed "Learn from my fixes". */

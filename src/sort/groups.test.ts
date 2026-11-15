@@ -111,6 +111,18 @@ describe('camera photos and unsure guesses', () => {
     // a screenshot known from its file name stays a screenshot
     expect(place(undefined, { screenshot: true, camera: true })).toMatchObject({ g: id('shots'), why: 'name' });
   });
+  it('a photo the AI calls a document, label or screen photo, but whose tags show something worth keeping, goes to Everything else as mixed', () => {
+    const sure = probs({ docs: 0.97, other: 0.03 });
+    expect(place({ g: id('docs'), p: 0.97, probs: sure }, {})).toMatchObject({ g: id('docs'), why: 'ai' });
+    expect(place({ g: id('docs'), p: 0.97, probs: sure }, { keepSign: true })).toEqual({ g: id('other'), p: expect.closeTo(0.97, 5), why: 'mixed', guess: id('docs') });
+    for (const g of ['labels', 'screens']) expect(place({ g: id(g), p: 0.9, probs: probs({ [g]: 0.9, other: 0.1 }) }, { keepSign: true })).toMatchObject({ g: id('other'), why: 'mixed', guess: id(g) });
+    // a screenshot of a photo of people is still a screenshot
+    expect(place({ g: id('shots'), p: 0.9, probs: probs({ shots: 0.9, other: 0.1 }) }, { keepSign: true })).toMatchObject({ g: id('shots'), why: 'ai' });
+    // keep groups, scan-tool screens (your call) and your own fixes are not touched
+    expect(place({ g: id('wires'), p: 0.9, probs: probs({ wires: 0.9, other: 0.1 }) }, { keepSign: true })).toMatchObject({ g: id('wires'), why: 'ai' });
+    expect(place({ g: id('scantool'), p: 0.9, probs: probs({ scantool: 0.9, other: 0.1 }) }, { keepSign: true })).toMatchObject({ g: id('scantool'), why: 'ai' });
+    expect(place({ g: id('docs'), p: 0.97, probs: sure }, { keepSign: true, fix: id('docs') })).toMatchObject({ g: id('docs'), why: 'you' });
+  });
   it('has a Thermal camera group on the keep side, and colored rooms and plane views have sentences', () => {
     expect(GROUPS[id('thermal')].side).toBe('keep');
     expect(GROUPS[id('lights')].prompts.some((p) => p.includes('colored lighting'))).toBe(true);

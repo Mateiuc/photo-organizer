@@ -1,5 +1,7 @@
 // Clean up: the SigLIP 2 AI sorts every photo into Junk and Keep groups. Open a group, tick its photos (all, or only the
 // sure ones) and use the bottom bar: Move to trash (after a confirm window, with Undo) or Move to group.
+// Inside a group, "Show only" narrows it to the photos with one tag (Car, Nature, People…, see sort/tags.ts), or to
+// the ones the AI leaned to junk on.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { setTicked, startSelecting, stopSelecting, useShownList, useTickedOf } from '../lib/selection';
 import type { Item } from '../lib/model';
@@ -9,6 +11,7 @@ import { checkPhoto, clearChecks, fixGroup, fixGroups, fresh, inDrive, needsSort
 import { sortPhotos } from '../read/reader';
 import { ReadProgress } from './ReadProgress';
 import { Thumb } from './Grid';
+import { keepSigns, TAGS } from '../sort/tags';
 
 const sideOf = (g: number) => GROUPS[g].side;
 const pct = (a: number, b: number) => (b ? Math.round((100 * a) / b) : 0);
@@ -25,14 +28,18 @@ function GroupSelect({ it, value, onPick }: { it: Item; value: number; onPick: (
   );
 }
 
-const WHY = { ai: '', name: 'file name', face: 'face', you: 'you', unsure: 'not sure' } as const;
+const WHY = { ai: '', name: 'file name', face: 'face', you: 'you', unsure: 'not sure', mixed: 'mixed' } as const;
 
 /** One photo: its picture, how sure the AI is, and the group (change it to fix a mistake). */
-function CleanTile({ it, g, p, why, guess, onOpen, check, selectable }: { it: Item; g: number; p: number; why: keyof typeof WHY; guess?: number; onOpen: () => void; check?: { answered?: boolean; ok?: boolean }; selectable?: boolean }) {
+function CleanTile({ it, g, p, why, guess, tags, onOpen, check, selectable }: { it: Item; g: number; p: number; why: keyof typeof WHY; guess?: number; tags?: number; onOpen: () => void; check?: { answered?: boolean; ok?: boolean }; selectable?: boolean }) {
+  const lean = guess != null ? GROUPS[guess].name : '';
+  const title = why === 'unsure' && guess != null ? `The AI leaned to ${lean}, but only ${Math.round(p * 100)}% sure: not enough to call it junk`
+    : why === 'mixed' && guess != null ? `The AI leaned to ${lean} (${Math.round(p * 100)}% sure), but the photo also shows ${keepSigns(tags).map((t) => t.name).join(', ')}: worth a look before deleting`
+    : 'How sure the AI is';
   return (
     <div className={`ctile${why === 'you' ? ' fixed' : ''}${check?.answered ? (check.ok ? ' right' : ' wrong') : ''}`}>
       <Thumb item={it} onOpen={onOpen} selectable={selectable} />
-      <span className="sure" title={why === 'unsure' && guess != null ? `The AI leaned to ${GROUPS[guess].name}, but only ${Math.round(p * 100)}% sure: not enough to call it junk` : 'How sure the AI is'}>{why === 'you' ? 'you' : `${Math.round(p * 100)}%`}{WHY[why] && why !== 'you' ? ` · ${WHY[why]}` : ''}</span>
+      <span className="sure" title={title}>{why === 'you' ? 'you' : `${Math.round(p * 100)}%`}{WHY[why] && why !== 'you' ? ` · ${WHY[why]}` : ''}</span>
       <div className="cbar">
         {check && !check.answered && <button className="ok" aria-label={`${it.name} is right`} title="Right group" onClick={() => checkPhoto(it.id, GROUPS[g].id, GROUPS[g].id)}>✓ Right</button>}
         <GroupSelect it={it} value={g} onPick={(ng) => (check && !check.answered ? checkPhoto(it.id, GROUPS[g].id, ng) : fixGroup(it.id, ng))} />
@@ -42,7 +49,7 @@ function CleanTile({ it, g, p, why, guess, onOpen, check, selectable }: { it: It
 }
 
 /** Photos in the order given (most sure first), a few hundred at a time. */
-function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; why: keyof typeof WHY; guess?: number }[]; onOpen: (l: Item[], i: number) => void }) {
+function CleanGrid({ list, tagsOf, onOpen }: { list: { it: Item; g: number; p: number; why: keyof typeof WHY; guess?: number }[]; tagsOf: (id: string) => number | undefined; onOpen: (l: Item[], i: number) => void }) {
   const [limit, setLimit] = useState(300);
   const sentinel = useRef<HTMLDivElement>(null);
   const items = useMemo(() => list.map((x) => x.it), [list]);
@@ -60,7 +67,7 @@ function CleanGrid({ list, onOpen }: { list: { it: Item; g: number; p: number; w
   return (
     <div>
       <div className="grid">
-        {list.slice(0, limit).map((x, i) => <CleanTile key={x.it.id} it={x.it} g={x.g} p={x.p} why={x.why} guess={x.guess} onOpen={() => onOpen(items, i)} selectable />)}
+        {list.slice(0, limit).map((x, i) => <CleanTile key={x.it.id} it={x.it} g={x.g} p={x.p} why={x.why} guess={x.guess} tags={tagsOf(x.it.id)} onOpen={() => onOpen(items, i)} selectable />)}
       </div>
       {limit < list.length && <div className="more" ref={sentinel}>Loading more…</div>}
     </div>
@@ -137,13 +144,34 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
     return c;
   }, [st.placed, st.v, byId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [open, setOpen] = useState<number | null>(null);
-  useEffect(() => { stopSelecting(); }, [open]); // ticks belong to the group on screen
+  // Inside an open group: only the photos with one tag, or only the ones the AI leaned to junk on ('lean').
+  const [only, setOnly] = useState<string | null>(null);
+  useEffect(() => { setOnly(null); }, [open]);
+  useEffect(() => { stopSelecting(); }, [open, only]); // ticks belong to the photos on screen
   const list = useMemo(() => {
     if (open == null) return [];
     const out: { it: Item; g: number; p: number; why: Why; guess?: number }[] = [];
     for (const [id, pl] of st.placed) { const it = byId.get(id); if (it && pl.g === open) out.push({ it, ...pl }); }
     return out.sort((a, b) => b.p - a.p || (b.it.takenAt ?? '').localeCompare(a.it.takenAt ?? ''));
   }, [open, st.placed, st.v, byId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tagsOf = (id: string) => st.tags.get(id);
+  // What is in this group's photos: how many have each tag, and how many the AI leaned to junk on.
+  const inGroup = useMemo(() => {
+    const n = new Array(TAGS.length).fill(0);
+    let lean = 0;
+    for (const x of list) {
+      if (x.why === 'unsure' || x.why === 'mixed') lean++;
+      const bits = st.tags.get(x.it.id);
+      if (bits) for (let t = 0; t < TAGS.length; t++) if (bits & (1 << t)) n[t]++;
+    }
+    return { n, lean };
+  }, [list, st.tags]);
+  const shownList = useMemo(() => {
+    if (only == null) return list;
+    if (only === 'lean') return list.filter((x) => x.why === 'unsure' || x.why === 'mixed');
+    const t = TAGS.findIndex((x) => x.id === only);
+    return t < 0 ? list : list.filter((x) => ((st.tags.get(x.it.id) ?? 0) & (1 << t)) !== 0);
+  }, [list, only, st.tags]);
 
   // Checking: 50 random photos from one side; each answer is kept (and a wrong one becomes a fix).
   const [check, setCheck] = useState<{ side: 'junk' | 'rest'; ids: string[]; shown: Map<string, number> } | null>(null);
@@ -260,8 +288,17 @@ export function CleanUp({ items, all, onOpen, pathOf }: { items: Item[]; all: It
             <span className="muted">Most sure first. If a photo is in the wrong group, pick the right one under it.</span>
             <button className="btn small" onClick={() => setOpen(null)}>Close</button>
           </div>
-          <GroupTicks list={list} />
-          <CleanGrid list={list} onOpen={onOpen} />
+          {(inGroup.lean > 0 || inGroup.n.some((c) => c > 0)) && (
+            <div className="row" aria-label="Show only">
+              <span className="muted small">Show only:</span>
+              <button className={`chip small ${only == null ? 'on' : ''}`} onClick={() => setOnly(null)}>All · {list.length.toLocaleString()}</button>
+              {inGroup.lean > 0 && <button className={`chip small ${only === 'lean' ? 'on' : ''}`} title="Photos the AI leaned to a junk group on, but was not sure enough, or that also show something worth keeping" onClick={() => setOnly(only === 'lean' ? null : 'lean')}>Leaned to junk · {inGroup.lean.toLocaleString()}</button>}
+              {TAGS.map((t, i) => inGroup.n[i] > 0 && <button key={t.id} className={`chip small ${only === t.id ? 'on' : ''}`} onClick={() => setOnly(only === t.id ? null : t.id)}>{t.name} · {inGroup.n[i].toLocaleString()}</button>)}
+            </div>
+          )}
+          {only === 'lean' && <p className="muted small" style={{ margin: 0 }}>The AI leaned to a junk group on these, but it was not sure enough (“not sure”), or the photo also shows something worth keeping, like people, a car or a room (“mixed”). Hover the percentage to see why. Look before deleting.</p>}
+          <GroupTicks list={shownList} />
+          <CleanGrid list={shownList} tagsOf={tagsOf} onOpen={onOpen} />
         </div>
       )}
     </div>

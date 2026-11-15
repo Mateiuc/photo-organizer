@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "model": "onnx-community/siglip2-base-patch16-224-ONNX",
+  "revision": "ba1f3b0843f24bc5417d38e19c37b287d719b2f4",
+  "count": 91,
+  "dim": 768,
+  "hash": "ebfa6c5f74b89f4887ad6e1c3299f3634622f62a5282e3a7135426acb48107fa"
+}

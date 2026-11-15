@@ -96,6 +96,14 @@ input[type=text], input[type=date], input[type=number], select { font: inherit; 
 .viewer .side dd { margin: 0 0 6px; overflow-wrap: anywhere; }
 .viewer .vbtn { position: absolute; top: calc(env(safe-area-inset-top, 0px) + 10px); background: #1d222c; border: 1px solid #3a4252; color: #eef1f6; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
 .viewer a { color: #9db4ff; }
+.viewer .infocard { border: 1px solid #2a3140; border-radius: 10px; padding: 10px 12px; background: #1a202a; display: grid; gap: 6px; }
+.viewer .infocard h3 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #c9d2e3; }
+.viewer .infocard dl { margin: 0; display: grid; gap: 6px; }
+.viewer .infocard dd { margin: 0; }
+.viewer .infocard p { margin: 0; }
+.viewer .infocard .dim { color: #8d97a8; }
+.viewer .infocard .tagrow { display: flex; flex-wrap: wrap; gap: 4px; }
+.viewer .infocard .tag { border: 1px solid #3a4252; border-radius: 999px; padding: 1px 8px; background: #222a37; color: inherit; font: inherit; text-transform: none; letter-spacing: 0; }
 
 .progress { height: 6px; background: var(--chip); border-radius: 3px; overflow: hidden; }
 .progress i { display: block; height: 100%; background: var(--accent); transition: width .3s; }
