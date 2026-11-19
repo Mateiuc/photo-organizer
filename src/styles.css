@@ -43,6 +43,7 @@ button { font: inherit; color: inherit; }
 
 .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-weight: 600; font-size: 13px; }
 .btn:hover { border-color: var(--accent); }
+a.btn { text-decoration: none; display: inline-block; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .btn.danger { color: var(--bad); border-color: var(--bad); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
@@ -274,3 +275,29 @@ button.link { background: none; border: 0; padding: 0; font: inherit; color: var
 .bcount { position: absolute; bottom: 0; right: 0; min-width: 22px; height: 22px; padding: 0 5px; border-radius: 11px; background: var(--ink, #1a2232); color: #fff; font: 600 11px/22px var(--f-mono); }
 .bbar { display: block; width: 88px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .bbar b { display: block; height: 100%; background: var(--accent); }
+
+/* Try the AI: the free AI on this PC (Ollama), a test of 20 photos */
+.tryai { max-width: 1100px; }
+.aisteps { margin: 0; padding-left: 22px; display: grid; gap: 6px; }
+.aisteps li { color: var(--muted); }
+.aisteps li.now, .aisteps li.done { color: var(--ink); }
+.aibox { border: 1px solid var(--accent); border-radius: 8px; padding: 12px; display: grid; gap: 8px; }
+.aibox p { margin: 0; }
+.aisum { margin: 0; display: grid; gap: 4px; }
+.aisum div { display: grid; grid-template-columns: 130px 1fr; gap: 8px; }
+.aisum dt { color: var(--muted); }
+.aisum dd { margin: 0; }
+.aigrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.aicard { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: grid; grid-template-rows: 190px auto; background: var(--panel); }
+.aipic { border: 0; padding: 0; background: var(--chip); cursor: zoom-in; min-height: 0; }
+.aipic img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.aitext { padding: 8px 10px 10px; display: grid; gap: 5px; align-content: start; }
+.aitext p { margin: 0; }
+.aitext .row { justify-content: space-between; }
+.aigroup { font-weight: 700; font-size: 13px; border-radius: 999px; padding: 1px 9px; border: 1px solid; }
+.aigroup.junk { color: var(--bad); }
+.aigroup.keep { color: var(--good); }
+.aisees { display: flex; flex-wrap: wrap; gap: 4px; }
+.aisees span { background: var(--chip); border-radius: 999px; padding: 1px 8px; font-size: 12px; }
+.mono { font-family: var(--f-mono); font-size: 12px; }
+@media (max-width: 520px) { .aisum div { grid-template-columns: 1fr; gap: 0; } .aigrid { grid-template-columns: 1fr; } }
