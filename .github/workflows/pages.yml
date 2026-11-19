@@ -20,6 +20,10 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+        env:
+          # onnxruntime-node (pulled in by transformers.js) downloads extra graphics-card files on Linux; that
+          # download answers 404 since 2026-11-19 (it worked on 11-15), and the app never uses them.
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
       - run: npm test
       - run: npm run build
         env:
